@@ -91,7 +91,8 @@ class MainActivity : ComponentActivity() {
      * 只隐藏导航栏。Cover Flow 与横屏播放页仍整屏隐藏。
      */
     @Volatile
-    private var keepStatusBarVisible = false
+    var keepStatusBarVisible = false
+        private set
 
     private var hidePosted = false
     private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -164,6 +165,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * 兜底：个别 ROM 会在转场结束 / 焦点回调之后才把状态栏真正藏掉，
+     * 此时 hideRetry 已经跑完。播放页停留期间再断言一次可见性。
+     */
+    fun reassertStatusBar() {
+        if (!keepStatusBarVisible) return
+        runCatching {
+            androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+                .show(androidx.core.view.WindowInsetsCompat.Type.statusBars())
+        }
+        CrashLogger.info("Immersive", "reassert statusBar v=${BuildConfig.VERSION_NAME}")
+    }
+
     /** 只隐藏系统栏，不碰任何窗口属性——属性改动会重新布局并把栏「顶」回来。 */
     private fun hideSystemBars() {
         runCatching {
@@ -172,8 +186,11 @@ class MainActivity : ComponentActivity() {
             val c = androidx.core.view.WindowCompat.getInsetsController(w, decor)
             c.systemBarsBehavior =
                 androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            // 播放页保留状态栏：只藏导航栏，避免把时间 / 电量一起藏掉
+            // 播放页保留状态栏：每次补 hide 都先 show 状态栏、再只藏导航栏。
+            // 只写 hide(navigationBars) 是不够的——进入/转场期间窗口属性重排，
+            // 系统会把之前藏掉的状态栏继续当作隐藏态，1 秒后看仍是 statusVisible=false。
             if (keepStatusBarVisible) {
+                c.show(androidx.core.view.WindowInsetsCompat.Type.statusBars())
                 c.hide(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
             } else {
                 c.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
@@ -183,6 +200,7 @@ class MainActivity : ComponentActivity() {
                     systemBarsBehavior =
                         android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
                     if (keepStatusBarVisible) {
+                        show(android.view.WindowInsets.Type.statusBars())
                         hide(android.view.WindowInsets.Type.navigationBars())
                     } else {
                         hide(
@@ -365,7 +383,8 @@ private fun AppRoot() {
             insets?.getInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars())?.top ?: -1
         CrashLogger.info(
             "Immersive",
-            "immersive=$immersive fullScreen=$fullScreen onPlayer=$onPlayer orientation=$orientation " +
+            "immersive=$immersive fullScreen=$fullScreen onPlayer=$onPlayer " +
+                "keepStatus=${activity.keepStatusBarVisible} v=${BuildConfig.VERSION_NAME} orientation=$orientation " +
                 "navRightInset=$navRight statusTopInset=$statusTop " +
                 "decorH=${decor.height} contentH=${decor.findViewById<android.view.View>(android.R.id.content)?.height} " +
                 "flags=${decor.systemUiVisibility} " +
@@ -377,7 +396,7 @@ private fun AppRoot() {
         val s = androidx.core.view.ViewCompat.getRootWindowInsets(decor)
         CrashLogger.info(
             "Immersive",
-            "settled(1.2s) immersive=$immersive statusTop=" +
+            "settled(1.2s) immersive=$immersive keepStatus=${activity.keepStatusBarVisible} v=${BuildConfig.VERSION_NAME} statusTop=" +
                 (s?.getInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars())?.top ?: -1) +
                 " navBottom=" + (s?.getInsets(androidx.core.view.WindowInsetsCompat.Type.navigationBars())?.bottom ?: -1) +
                 " statusVisible=" + (s?.isVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars())) +
@@ -385,6 +404,12 @@ private fun AppRoot() {
                 " decorH=${decor.height} contentH=" +
                 (decor.findViewById<android.view.View>(android.R.id.content)?.height)
         )
+        // 播放页要求状态栏常驻：1.2 秒后仍报隐藏，说明系统在补 hide 阶段又把它藏了，再纠正一次
+        if (immersive && activity.keepStatusBarVisible &&
+            s?.isVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars()) != true
+        ) {
+            activity.reassertStatusBar()
+        }
     }
 
     // 安卓手势返回 / 返回键：按导航栈逐层回退；首页时退到后台而不是 finish 退出应用。

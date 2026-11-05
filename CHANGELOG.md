@@ -4,6 +4,15 @@
 
 <!-- 推到自己的仓库后，把文末 compare 链接里的 your-name 替换成实际 GitHub 用户名；或直接删掉链接定义，改为纯文本标题。 -->
 
+## [1.2.4] - 2025-11-05
+
+### Fixed
+- 播放页状态栏仍被隐藏：`hideSystemBars()` 在「保留状态栏」模式下只隐藏了导航栏，但 150 / 500 / 1000ms 的补 hide 期间系统会沿用旧的隐藏态，1.2 秒后 `statusVisible` 仍是 false。现在每次补 hide 都先 `show(statusBars)` 再 `hide(navigationBars)`。
+- 增加 1.2 秒后的兜底断言：状态栏仍不可见时再 show 一次，并写入 `reassert statusBar` 日志。
+
+### Changed
+- `Immersive` 诊断日志新增 `keepStatus` 与版本号（`v=1.2.4`），可据此确认实际安装的包与状态栏策略是否生效。
+
 ## [1.2.3] - 2025-11-05
 
 ### Changed
@@ -137,6 +146,7 @@
 
 初始版本：WebDAV / 飞牛 FnOS 音源接入、全库扫描与缓存、Media3 播放与通知栏控制、歌词与封面解析、CoverFlow 浏览。
 
+[1.2.4]: https://github.com/your-name/MatrixMusic/compare/v1.2.3...v1.2.4
 [1.2.3]: https://github.com/your-name/MatrixMusic/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/your-name/MatrixMusic/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/your-name/MatrixMusic/compare/v1.2.0...v1.2.1
