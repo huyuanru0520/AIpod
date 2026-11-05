@@ -4,6 +4,12 @@
 
 <!-- 推到自己的仓库后，把文末 compare 链接里的 your-name 替换成实际 GitHub 用户名；或直接删掉链接定义，改为纯文本标题。 -->
 
+## [1.2.2] - 2025-11-05
+
+### Changed
+- 播放页歌曲信息（小封面 + 歌名 / 歌手 + 队列 / 更多）不再贴顶，改为下移约 1/5 屏高，落在歌词上方原本空着的区域；当前句仍严格垂直居中，顶部由封面背景自然留白。
+- 歌曲信息与歌词在视觉上连成一个整体，不再是一条孤零零压在状态栏下的信息条。
+
 ## [1.2.1] - 2025-11-05
 
 ### Changed
@@ -121,6 +127,7 @@
 
 初始版本：WebDAV / 飞牛 FnOS 音源接入、全库扫描与缓存、Media3 播放与通知栏控制、歌词与封面解析、CoverFlow 浏览。
 
+[1.2.2]: https://github.com/your-name/MatrixMusic/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/your-name/MatrixMusic/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/your-name/MatrixMusic/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/your-name/MatrixMusic/compare/v1.1.1...v1.1.2

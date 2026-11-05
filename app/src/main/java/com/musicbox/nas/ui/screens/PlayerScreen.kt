@@ -155,14 +155,6 @@ fun PlayerScreen(navController: NavController) {
         // 竖屏背景与横屏一致：模糊当前封面 + 主色调 + 暗化渐变
         CoverBackdrop(current)
         Column(Modifier.fillMaxSize()) {
-            // 顶部：小封面 + 歌名 / 歌手 + 队列 / 更多入口。
-            // 封面不再独占一页，而是与歌词同屏出现。
-            TrackHeader(
-                track = current,
-                onQueueClick = { showQueue = true },
-                onBack = { navController.popBackStack() }
-            )
-
             // 播放错误直接可见（错误码 + 描述），完整堆栈写入「下载」目录日志
             if (playError != null) {
                 Row(
@@ -200,6 +192,18 @@ fun PlayerScreen(navController: NavController) {
                         largeText = true,
                         fadeByDistance = true
                     )
+                    // 歌曲信息不再贴顶：下移约 1/5 屏，落在歌词上方的空白里。
+                    // 当前句仍严格居中，于是「封面 + 歌名 + 队列 / 更多」与歌词形成一个整体，
+                    // 顶部留白由封面背景自然承接，不再是孤零零一条贴在状态栏下。
+                    BoxWithConstraints(Modifier.fillMaxSize()) {
+                        val headerTop = (maxHeight * 0.20f).coerceIn(48.dp, 140.dp)
+                        TrackHeader(
+                            track = c,
+                            onQueueClick = { showQueue = true },
+                            onBack = { navController.popBackStack() },
+                            modifier = Modifier.align(Alignment.TopCenter).padding(top = headerTop)
+                        )
+                    }
                 }
 
                 HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
@@ -225,13 +229,14 @@ fun PlayerScreen(navController: NavController) {
 private fun TrackHeader(
     track: Track?,
     onQueueClick: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var menu by remember { mutableStateOf(false) }
     var showArt by remember { mutableStateOf(false) }
     val context = LocalContext.current
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .padding(start = 16.dp, end = 8.dp, top = 14.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically

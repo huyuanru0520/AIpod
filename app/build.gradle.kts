@@ -29,8 +29,8 @@ android {
         applicationId = "com.musicbox.nas"
         minSdk = 21
         targetSdk = 34
-        versionCode = 50
-        versionName = "1.2.1"
+        versionCode = 51
+        versionName = "1.2.2"
     }
 
     signingConfigs {
