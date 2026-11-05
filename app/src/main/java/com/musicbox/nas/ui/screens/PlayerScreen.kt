@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -154,7 +155,16 @@ fun PlayerScreen(navController: NavController) {
     Box(Modifier.fillMaxSize()) {
         // 竖屏背景与横屏一致：模糊当前封面 + 主色调 + 暗化渐变
         CoverBackdrop(current)
-        Column(Modifier.fillMaxSize()) {
+        // 播放页保留状态栏（见 MainActivity.keepStatusBarVisible）：内容从状态栏下方开始，
+        // 但背景仍在 Box 里铺满整屏，状态栏透出的是封面模糊图而不是黑条。
+        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+            // 顶部：小封面 + 歌名 / 歌手 + 队列 / 更多（参考 iOS 音乐，紧贴状态栏下方）
+            TrackHeader(
+                track = current,
+                onQueueClick = { showQueue = true },
+                onBack = { navController.popBackStack() }
+            )
+
             // 播放错误直接可见（错误码 + 描述），完整堆栈写入「下载」目录日志
             if (playError != null) {
                 Row(
@@ -192,18 +202,6 @@ fun PlayerScreen(navController: NavController) {
                         largeText = true,
                         fadeByDistance = true
                     )
-                    // 歌曲信息不再贴顶：下移约 1/5 屏，落在歌词上方的空白里。
-                    // 当前句仍严格居中，于是「封面 + 歌名 + 队列 / 更多」与歌词形成一个整体，
-                    // 顶部留白由封面背景自然承接，不再是孤零零一条贴在状态栏下。
-                    BoxWithConstraints(Modifier.fillMaxSize()) {
-                        val headerTop = (maxHeight * 0.20f).coerceIn(48.dp, 140.dp)
-                        TrackHeader(
-                            track = c,
-                            onQueueClick = { showQueue = true },
-                            onBack = { navController.popBackStack() },
-                            modifier = Modifier.align(Alignment.TopCenter).padding(top = headerTop)
-                        )
-                    }
                 }
 
                 HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
@@ -238,7 +236,7 @@ private fun TrackHeader(
     Row(
         modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 8.dp, top = 14.dp, bottom = 10.dp),
+            .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (track != null) {

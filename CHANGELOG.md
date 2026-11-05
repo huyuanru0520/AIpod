@@ -4,6 +4,16 @@
 
 <!-- 推到自己的仓库后，把文末 compare 链接里的 your-name 替换成实际 GitHub 用户名；或直接删掉链接定义，改为纯文本标题。 -->
 
+## [1.2.3] - 2025-11-05
+
+### Changed
+- 竖屏播放页保留系统状态栏（参考 iOS 音乐）：时间 / 电量常驻可见，内容从状态栏下方开始，封面模糊背景仍铺满整屏。
+- 歌曲信息（封面 + 歌名 / 歌手 + 队列 / 更多）回到状态栏下方 10dp，不再按歌词区比例大幅下移。
+- 状态栏随页面自动显隐：仅竖屏播放页保留；曲库 / 设置 / Cover Flow / 横屏播放页维持原沉浸状态。
+
+### Fixed
+- 修复 1.2.2 把信息块推到歌词区 1/5 高度后，顶部状态栏区域空出一大片、信息块与歌词脱节的问题。
+
 ## [1.2.2] - 2025-11-05
 
 ### Changed
@@ -127,6 +137,7 @@
 
 初始版本：WebDAV / 飞牛 FnOS 音源接入、全库扫描与缓存、Media3 播放与通知栏控制、歌词与封面解析、CoverFlow 浏览。
 
+[1.2.3]: https://github.com/your-name/MatrixMusic/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/your-name/MatrixMusic/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/your-name/MatrixMusic/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/your-name/MatrixMusic/compare/v1.1.2...v1.2.0

@@ -86,12 +86,20 @@ class MainActivity : ComponentActivity() {
     @Volatile
     private var lastHideAt = 0L
 
+    /**
+     * 竖屏播放页要保留状态栏（参考 iOS 音乐：时间 / 电量正常显示，歌曲信息在其下方），
+     * 只隐藏导航栏。Cover Flow 与横屏播放页仍整屏隐藏。
+     */
+    @Volatile
+    private var keepStatusBarVisible = false
+
     private var hidePosted = false
     private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val hideRetry = Runnable { if (immersiveWanted) hideSystemBars() }
 
-    fun setImmersiveWanted(on: Boolean) {
+    fun setImmersiveWanted(on: Boolean, keepStatusBar: Boolean = false) {
         immersiveWanted = on
+        keepStatusBarVisible = on && keepStatusBar
         if (on) {
             applyImmersive()
             // 系统栏隐藏是一段动画（约 200~300ms），个别 ROM 会在转场结束、窗口焦点变化的
@@ -147,6 +155,12 @@ class MainActivity : ComponentActivity() {
             androidx.core.view.WindowCompat.setDecorFitsSystemWindows(w, false)
             // ④ 最后隐藏，此后不再改动任何窗口属性
             hideSystemBars()
+            // 播放页需要状态栏常驻：hide 只隐藏了导航栏，这里再把状态栏显式 show 一次
+            //（从 Cover Flow 过来时它可能还是隐藏状态）。幂等，不会引起额外布局。
+            if (keepStatusBarVisible) {
+                androidx.core.view.WindowCompat.getInsetsController(w, decor)
+                    .show(androidx.core.view.WindowInsetsCompat.Type.statusBars())
+            }
         }
     }
 
@@ -158,15 +172,24 @@ class MainActivity : ComponentActivity() {
             val c = androidx.core.view.WindowCompat.getInsetsController(w, decor)
             c.systemBarsBehavior =
                 androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            c.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            // 播放页保留状态栏：只藏导航栏，避免把时间 / 电量一起藏掉
+            if (keepStatusBarVisible) {
+                c.hide(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+            } else {
+                c.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            }
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
                 w.insetsController?.apply {
                     systemBarsBehavior =
                         android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                    hide(
-                        android.view.WindowInsets.Type.navigationBars()
-                            or android.view.WindowInsets.Type.statusBars()
-                    )
+                    if (keepStatusBarVisible) {
+                        hide(android.view.WindowInsets.Type.navigationBars())
+                    } else {
+                        hide(
+                            android.view.WindowInsets.Type.navigationBars()
+                                or android.view.WindowInsets.Type.statusBars()
+                        )
+                    }
                 }
             }
             lastHideAt = System.currentTimeMillis()
@@ -182,9 +205,13 @@ class MainActivity : ComponentActivity() {
         runCatching {
             androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { v, insets ->
                 if (immersiveWanted) {
-                    val barsVisible =
+                    // 播放页刻意保留状态栏，自愈只盯导航栏，否则会把刚显示的状态栏又藏回去
+                    val barsVisible = if (keepStatusBarVisible) {
+                        insets.isVisible(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+                    } else {
                         insets.isVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars()) ||
                             insets.isVisible(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+                    }
                     val now = android.os.SystemClock.uptimeMillis()
                     if (barsVisible && !hidePosted && now - lastHideAt > 400L) {
                         hidePosted = true
@@ -305,7 +332,9 @@ private fun AppRoot() {
             //（见 applyImmersive 的注释）。旧代码在这之后又改了一次
             // layoutInDisplayCutoutMode + requestLayout，正好把刚藏起来的系统栏顶了回来，
             // 于是首帧顶部留下一条状态栏高的黑带，要转一次屏才好。
-            activity.setImmersiveWanted(true)
+            // 竖屏播放页保留状态栏；Cover Flow 与横屏播放页仍整屏沉浸
+            val keepStatus = onPlayer && !fullScreen && orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+            activity.setImmersiveWanted(true, keepStatusBar = keepStatus)
         } else {
             activity.setImmersiveWanted(false)
             // 先恢复窗口属性，最后再 show 系统栏（同样是顺序问题）
