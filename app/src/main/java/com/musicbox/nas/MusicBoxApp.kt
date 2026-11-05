@@ -17,9 +17,11 @@ import com.musicbox.nas.data.createLenientOkHttpClient
 import com.musicbox.nas.data.fnos.FnosClient
 import com.musicbox.nas.data.fnos.FnosConnection
 import com.musicbox.nas.data.Track
+import com.musicbox.nas.data.rebasedTo
 import com.musicbox.nas.data.webdav.DavLibrary
 import com.musicbox.nas.data.webdav.WebDavClient
 import com.musicbox.nas.data.webdav.WebDavConnection
+import com.musicbox.nas.player.PlayerController
 import com.musicbox.nas.util.CrashLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -111,6 +113,11 @@ class MusicBoxApp : Application() {
     val webDavAutoScanAttempted = MutableStateFlow(false)
     /** 扫描过程中实时回传的「已找到歌曲」列表，每次扫描开始清空，供曲库页实时展示。 */
     val webDavScanFound = MutableStateFlow<List<Track>>(emptyList())
+    /**
+     * 落盘曲库索引是按哪条线路扫出来的（如 http://192.168.1.10:5005）。
+     * 主备线路切换后据此把索引里的绝对地址原地改写，避免重新全库扫描。
+     */
+    private var davCacheBase: String? = null
     /** 相邻请求最小间隔（ms），设置页可调，默认均衡档。 */
     val scanPaceMs = MutableStateFlow(ScanPace.BALANCED_INTERVAL)
     /** 并行 PROPFIND 数：真正的并发，默认均衡档 6 路，越大扫描越快但越易触发限流。 */
@@ -174,7 +181,8 @@ class MusicBoxApp : Application() {
             )
             webDavLibrary.value = result
             webDavScanFound.value = emptyList()
-            saveDavLibraryCache(result)
+            // 记录这份索引是按哪条线路扫出来的，主备切换时据此改写地址而不必重扫
+            saveDavLibraryCache(result, webDavClient.lastActiveBaseUrl ?: conn.baseUrl)
             webDavScanProgress.value =
                 "扫描完成：${result.tracks.size} 首歌曲 / ${result.albums.size} 张专辑 / " +
                     "${result.artists.size} 位歌手 / ${result.playlists.size} 个歌单" +
@@ -211,23 +219,87 @@ class MusicBoxApp : Application() {
             null
         }
         if (cached != null) {
+            davCacheBase = dataStore.data.first()[W_CACHE_BASE]
             webDavLibrary.value = cached
             webDavAutoScanAttempted.value = true
             webDavScanProgress.value =
                 "已加载上次扫描的索引：${cached.tracks.size} 首歌曲 · ${cached.albums.size} 张专辑 · " +
                     "${cached.artists.size} 位歌手 · ${cached.playlists.size} 个歌单（如需更新请手动扫描）"
-            CrashLogger.info("WebDAV", "从缓存恢复索引，跳过本次自动全库扫描：${cached.tracks.size} 首歌曲")
+            CrashLogger.info(
+                "WebDAV",
+                "从缓存恢复索引，跳过本次自动全库扫描：${cached.tracks.size} 首歌曲；" +
+                    "索引线路=${davCacheBase ?: "未记录（旧版缓存）"}"
+            )
         }
     }
 
-    private suspend fun saveDavLibraryCache(lib: DavLibrary) {
+    private suspend fun saveDavLibraryCache(lib: DavLibrary, base: String? = null) {
         runCatching {
             java.io.ObjectOutputStream(davCacheFile().outputStream()).use { it.writeObject(lib) }
         }.onFailure { CrashLogger.error("WebDAV.cache.write", it) }
+        davCacheBase = base
+        runCatching {
+            dataStore.edit { p ->
+                if (base.isNullOrBlank()) p.remove(W_CACHE_BASE) else p[W_CACHE_BASE] = base
+            }
+        }.onFailure { CrashLogger.error("WebDAV.cache.base", it) }
     }
 
     private suspend fun clearDavLibraryCache() {
+        davCacheBase = null
         runCatching { davCacheFile().delete() }
+        runCatching { dataStore.edit { it.remove(W_CACHE_BASE) } }
+    }
+
+    /**
+     * 这份缓存是按哪条线路扫出来的。旧版本缓存没有记录该字段，返回 null。
+     */
+    suspend fun cachedLibraryBase(): String? {
+        if (davCacheBase == null) {
+            davCacheBase = runCatching { dataStore.data.first()[W_CACHE_BASE] }.getOrNull()
+        }
+        return davCacheBase
+    }
+
+    /**
+     * 主备线路切换时，把曲库里所有绝对地址整体换到新线路 —— **不重新扫描**。
+     *
+     * 扫描结果是几千条绝对 URL，重新全库 PROPFIND 既慢又最容易触发网盘风控；
+     * 而主备线路指向的是同一台 NAS、同一份目录，只是入口地址不同，
+     * 因此把 `scheme://host:port` 前缀换掉就能继续用。
+     *
+     * @return 是否真的发生了改写
+     */
+    suspend fun rebaseWebDavLibrary(newBase: String): Boolean {
+        val lib = webDavLibrary.value ?: return false
+        val oldBase = cachedLibraryBase() ?: return false
+        if (oldBase == newBase) return false
+
+        val rebased = lib.rebasedTo(oldBase, newBase)
+        webDavLibrary.value = rebased
+        PlayerController.rebaseQueue(oldBase, newBase)
+        saveDavLibraryCache(rebased, newBase)
+        CrashLogger.info("WebDAV", "线路切换：曲库地址 $oldBase → $newBase（复用索引，未重新扫描）")
+        return true
+    }
+
+    /**
+     * 进入曲库前对齐线路：探测一次当前可用线路，若与缓存索引的线路不同则原地改写地址。
+     *
+     * 只在「缓存线路是当前配置里的主/备之一」时才改写；否则说明用户换了地址或根路径，
+     * 交给正常扫描流程处理，避免把地址改错。
+     */
+    suspend fun ensureWebDavLine(conn: WebDavConnection): Boolean {
+        val lib = webDavLibrary.value ?: return false
+        if (lib.tracks.isEmpty() || conn.backupBaseUrl == null) return false
+        val known = setOfNotNull(conn.baseUrl, conn.backupBaseUrl)
+        val oldBase = cachedLibraryBase() ?: return false
+        if (oldBase !in known) return false
+
+        val active = webDavClient.pickActiveConn(conn)
+        val newBase = active.baseUrl
+        if (newBase == oldBase) return false
+        return rebaseWebDavLibrary(newBase)
     }
 
     /** 设置页调整扫描节奏（间隔 + 并行数），持久化后下一次扫描生效。 */
@@ -372,6 +444,13 @@ class MusicBoxApp : Application() {
 
     // ---- WebDAV persistence ----
 
+    /** 两份配置是否共享至少一个端点：说明只是主备互换/调整，仍是同一台 NAS。 */
+    private fun sharesEndpoint(a: WebDavConnection, b: WebDavConnection): Boolean {
+        val aSet = setOfNotNull(a.baseUrl, a.backupBaseUrl)
+        val bSet = setOfNotNull(b.baseUrl, b.backupBaseUrl)
+        return aSet.any { it in bSet }
+    }
+
     /** 保存（或更新）WebDAV 配置并连接。传 null 等价于「断开但保留配置」。 */
     suspend fun saveWebDav(conn: WebDavConnection?) {
         if (conn == null) {
@@ -379,13 +458,38 @@ class MusicBoxApp : Application() {
             return
         }
         CrashLogger.info("Settings", "保存 WebDAV ${conn.baseUrl}")
+        val previous = savedWebDav.value
         savedWebDav.value = conn
         webDavConn.value = conn
         webDavClient.registerAuth(conn)
-        // 配置变化后旧索引失效：删缓存，并允许新配置自动扫描一次
-        webDavLibrary.value = null
-        clearDavLibraryCache()
-        webDavAutoScanAttempted.value = false
+
+        // 只是主线路 / 备用线路互换或调整（账号、密码、根路径都没变）时，
+        // 索引内容依然有效 —— 把里面的绝对地址整体换到新线路即可，不必重新全库扫描。
+        val sameAccount = previous != null &&
+            previous.username == conn.username &&
+            previous.password == conn.password &&
+            previous.rootPath == conn.rootPath &&
+            sharesEndpoint(previous, conn)
+
+        if (sameAccount) {
+            val cacheBase = cachedLibraryBase()
+            if (cacheBase != null) {
+                rebaseWebDavLibrary(conn.baseUrl)
+            } else if (previous != null && previous.baseUrl == conn.baseUrl) {
+                CrashLogger.info("Settings", "仅备用线路变化，曲库索引继续复用")
+            } else {
+                // 旧版缓存没记录线路，改写不安全，只能重扫这一次
+                CrashLogger.info("Settings", "旧缓存缺少线路记录，安排一次重新扫描")
+                webDavLibrary.value = null
+                clearDavLibraryCache()
+                webDavAutoScanAttempted.value = false
+            }
+        } else {
+            // 账号 / 根路径 / 全新地址：旧索引不可信，删缓存并允许自动扫描一次
+            webDavLibrary.value = null
+            clearDavLibraryCache()
+            webDavAutoScanAttempted.value = false
+        }
         dataStore.edit { p ->
             p[W_HOST] = conn.host
             p[W_PORT] = conn.port
@@ -587,6 +691,8 @@ private val W_PATH = stringPreferencesKey("webdav_path")
 private val W_BHOST = stringPreferencesKey("webdav_backup_host")
 private val W_BPORT = intPreferencesKey("webdav_backup_port")
 private val W_BHTTPS = booleanPreferencesKey("webdav_backup_https")
+/** 索引缓存对应的线路地址；用于主备切换时判断是否需要改写 URL。 */
+private val W_CACHE_BASE = stringPreferencesKey("webdav_cache_base")
 private val F_HOST = stringPreferencesKey("fnos_host")
 private val F_PORT = intPreferencesKey("fnos_port")
 private val F_HTTPS = booleanPreferencesKey("fnos_https")

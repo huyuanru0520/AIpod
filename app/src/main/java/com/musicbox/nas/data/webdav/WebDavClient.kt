@@ -13,6 +13,7 @@ import com.musicbox.nas.util.CrashLogger
 import com.musicbox.nas.util.extensionOf
 import android.media.MediaMetadataRetriever
 import java.io.File
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -195,6 +196,15 @@ private class ScanThrottle(baseIntervalMs: Long, concurrency: Int) {
 
 class WebDavClient(private val okHttp: OkHttpClient, private val registry: AuthRegistry) {
 
+    /**
+     * 最近一次 [pickActiveConn] 实际选中的线路地址。
+     * 扫描结果里存的是绝对 URL，必须记住它是按哪条线路生成的，
+     * 否则主备切换后曲库缓存里的地址会全部指向不可达的机器。
+     */
+    @Volatile
+    var lastActiveBaseUrl: String? = null
+        private set
+
     fun registerAuth(conn: WebDavConnection) {
         registry.put(conn.baseUrl, HostAuth(AuthType.BASIC, conn.username, conn.password))
         conn.backupBaseUrl?.let { registry.put(it, HostAuth(AuthType.BASIC, conn.username, conn.password)) }
@@ -206,22 +216,30 @@ class WebDavClient(private val okHttp: OkHttpClient, private val registry: AuthR
      * 保证扫描出的歌曲 / 封面 / 播放地址都指向同一可用线路。
      */
     suspend fun pickActiveConn(conn: WebDavConnection): WebDavConnection = withContext(Dispatchers.IO) {
-        if (conn.backupBaseUrl == null) return@withContext conn
+        if (conn.backupBaseUrl == null) {
+            lastActiveBaseUrl = conn.baseUrl
+            return@withContext conn
+        }
         val ok = runCatching {
-            val r = okHttp.newCall(
+            val call = okHttp.newCall(
                 Request.Builder().url(conn.baseUrl + conn.rootPath)
                     .method("PROPFIND", PROPFIND_BODY.toRequestBody("application/xml; charset=utf-8".toMediaType()))
                     .header("Depth", "1").header("Content-Type", "application/xml; charset=utf-8")
                     .header("User-Agent", USER_AGENT).build()
-            ).execute()
+            )
+            // 探测只为判断「通不通」，4 秒足够；默认 20 秒 connectTimeout 会让进入曲库白等很久
+            call.timeout().timeout(4, TimeUnit.SECONDS)
+            val r = call.execute()
             // 网络层连通即视为主线路可用；401/403 是认证问题，不是线路问题，仍走主线路
             r.code != -1
         }.getOrDefault(false)
         if (ok) {
             CrashLogger.info("WebDAV", "主线路可用：${conn.baseUrl}")
+            lastActiveBaseUrl = conn.baseUrl
             conn
         } else {
             CrashLogger.info("WebDAV", "主线路不可达，切换到备用线路：${conn.backupBaseUrl}")
+            lastActiveBaseUrl = conn.backupBaseUrl
             conn.copy(host = conn.backupHost!!, port = conn.backupPort, useHttps = conn.backupUseHttps)
         }
     }

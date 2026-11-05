@@ -4,6 +4,19 @@
 
 <!-- 推到自己的仓库后，把文末 compare 链接里的 your-name 替换成实际 GitHub 用户名；或直接删掉链接定义，改为纯文本标题。 -->
 
+## [1.1.2] - 2025-11-05
+
+### Added
+- 主备线路切换不再触发重新扫描：曲库索引会记录自己是由哪条线路扫出来的，切换时把里面的绝对地址原地改写，毫秒级完成、零网络请求。
+- 播放中线路失效会自动换到另一条线路重试一次，并回到原来的播放位置。
+
+### Changed
+- 只有账号、密码、根路径都没变（即主备互换或调整地址）时才复用索引；换机器或改路径仍然重新扫描，避免把地址改错。
+- 主线路探测加了 4 秒整体超时，主线路挂掉时备用线路能更快接管。
+
+### Fixed
+- 主线路不可达时进入曲库，缓存里的封面与播放地址仍指向主线路，导致整页封面空白、点播放报错。
+
 ## [1.1.1] - 2025-11-05
 
 ### Changed
@@ -87,6 +100,7 @@
 
 初始版本：WebDAV / 飞牛 FnOS 音源接入、全库扫描与缓存、Media3 播放与通知栏控制、歌词与封面解析、CoverFlow 浏览。
 
+[1.1.2]: https://github.com/your-name/MatrixMusic/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/your-name/MatrixMusic/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/your-name/MatrixMusic/compare/v1.0.44...v1.1.0
 [1.0.44]: https://github.com/your-name/MatrixMusic/compare/v1.0.43...v1.0.44

@@ -10,7 +10,7 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.24-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material3-4285F4?logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![Media3](https://img.shields.io/badge/Media3-1.5.1-FF6F00)](https://developer.android.com/media/media3)
-[![Version](https://img.shields.io/badge/version-1.1.1-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.2-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 </div>
@@ -30,6 +30,7 @@ Matrix Music 不建索引库、不依赖服务端插件，直接用 WebDAV 协�
 | **音源** | WebDAV（Basic / 匿名）、飞牛 FnOS 音乐（账号登录、多线路回退）；同一时刻启用一种，设置里切换 |
 | **媒体库** | 歌曲 / 歌手 / 歌单 / 专辑 / 文件夹 / 搜索六个栏目，可自由勾选显示 |
 | **扫描** | 四档节奏（温和 250ms·3 路 → 极速 0ms·32 路），STRM 场景可全速；结果落盘缓存，冷启动秒开 |
+| **线路** | 主备地址自动切换；切换时直接改写索引里的地址，不重新扫描，正在播的歌也会自动换线重试 |
 | **播放** | Media3 ExoPlayer，MediaSession 接入系统媒体控制与通知栏；支持 FLAC / ALAC / WAV / AAC / MP3 |
 | **软解兜底** | 内置 FFmpeg 扩展（4 ABI），MediaCodec 不支持的无损格式自动降级软解 |
 | **封面** | 优先用同目录的 cover 图（`cover.jpg` / `folder.png` / `front.webp` 等，省流量），目录没有才从音频文件内嵌标签提取（FLAC PICTURE / VorbisComment base64 / ID3 APIC / MP4 `covr`）；通知栏同步显示 |

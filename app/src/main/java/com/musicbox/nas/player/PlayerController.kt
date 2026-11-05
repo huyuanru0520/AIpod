@@ -14,7 +14,9 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.musicbox.nas.AudioQuality
 import com.musicbox.nas.MusicBoxApp
+import com.musicbox.nas.data.SourceType
 import com.musicbox.nas.data.Track
+import com.musicbox.nas.data.rebasedTo
 import com.musicbox.nas.ui.components.coverJpegBytes
 import com.musicbox.nas.util.CrashLogger
 import kotlinx.coroutines.CoroutineScope
@@ -78,6 +80,9 @@ object PlayerController {
 
     /** 最近一次播放错误（错误码 + 描述），UI 直接展示，便于定位。 */
     private val _error = MutableStateFlow<String?>(null)
+
+    /** 本首歌是否已经因「线路不可达」自动换线路重试过一次，防止反复触发形成死循环。 */
+    private var backupRetryDone = false
     val error = _error.asStateFlow()
 
     val current: Track?
@@ -85,6 +90,58 @@ object PlayerController {
             val idx = _currentIndex.value
             return if (idx in _queue.value.indices) _queue.value[idx] else null
         }
+
+    /**
+     * 主备线路切换后，把队列里的绝对地址换到新线路。
+     *
+     * 只改队列数据，不动正在播放的 MediaItem —— 强行 setMediaItems 会打断当前这首歌。
+     * 当前曲目仍然指向旧线路（若旧线路已断，本首会播完/播错），从下一首开始全部走新地址。
+     */
+    fun rebaseQueue(oldBase: String, newBase: String) {
+        if (oldBase.isBlank() || newBase.isBlank() || oldBase == newBase) return
+        val q = _queue.value
+        if (q.isEmpty()) return
+        _queue.value = q.map { it.rebasedTo(oldBase, newBase) }
+        CrashLogger.info(TAG, "播放队列地址已随线路切换：$oldBase → $newBase（${q.size} 首）")
+    }
+
+    /**
+     * 当前这首歌的地址不可达（线路挂了）时，自动换到配置里的另一条线路重试一次。
+     *
+     * 只在 WebDAV 音源上生效：M3U / 本地文件的地址不属于主备线路体系。
+     * 重试后仍失败就把错误抛给 UI，不再循环尝试。
+     */
+    private fun tryBackupLineRetry(posBeforeError: Long) {
+        if (backupRetryDone) return
+        val conn = MusicBoxApp.instance.webDavConn.value ?: return
+        val backup = conn.backupBaseUrl ?: return
+        val t = current ?: return
+        if (t.source != SourceType.WEBDAV) return
+
+        val oldBase: String
+        val altBase: String
+        if (t.streamUrl.startsWith(conn.baseUrl)) {
+            oldBase = conn.baseUrl
+            altBase = backup
+        } else if (t.streamUrl.startsWith(backup)) {
+            oldBase = backup
+            altBase = conn.baseUrl
+        } else {
+            return
+        }
+
+        backupRetryDone = true
+        CrashLogger.info(TAG, "线路不可达，自动换线路重试一次：$oldBase → $altBase")
+        rebaseQueue(oldBase, altBase)
+
+        val q = _queue.value
+        val idx = _currentIndex.value
+        if (idx !in q.indices) return
+        playTracks(q, idx)
+        if (posBeforeError > 0L) {
+            runCatching { player?.seekTo(posBeforeError) }
+        }
+    }
 
     /** 组合完成后调用：创建/复用 player、注册监听、异步建立媒体会话。 */
     fun attach(context: Context) {
@@ -104,7 +161,10 @@ object PlayerController {
                 }
 
                 override fun onPlaybackStateChanged(state: Int) {
-                    if (state == Player.STATE_READY) _duration.value = p.duration.coerceAtLeast(0)
+                    if (state == Player.STATE_READY) {
+                        _duration.value = p.duration.coerceAtLeast(0)
+                        backupRetryDone = false
+                    }
                     CrashLogger.info("Player", "播放状态=$state (${stateName(state)})")
                 }
 
@@ -129,6 +189,7 @@ object PlayerController {
                     val msg = "code=${e.errorCode} (${e.errorCodeName})｜${e.message ?: "无消息"}"
                     _error.value = msg
                     CrashLogger.error("PlayerError", e)
+                    tryBackupLineRetry(posBeforeError = _position.value)
                     CrashLogger.info("PlayerError", msg)
                 }
 

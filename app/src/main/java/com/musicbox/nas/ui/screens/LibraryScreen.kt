@@ -1442,6 +1442,10 @@ private fun WebDavSection(navController: NavController) {
     }
 
     LaunchedEffect(c) {
+        // 先对齐线路：主线路不可达时会切到备用，并把已缓存索引里的绝对地址原地改写，
+        // 整个过程不重新扫描（重扫既慢又最容易触发网盘限流）。
+        runCatching { app.ensureWebDavLine(c) }
+            .onFailure { com.musicbox.nas.util.CrashLogger.error("WebDAV.line", it) }
         if (app.webDavLibrary.value == null && !app.webDavScanning.value &&
             !app.webDavAutoScanAttempted.value
         ) {
