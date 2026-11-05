@@ -38,6 +38,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
@@ -57,7 +58,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -66,6 +69,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.musicbox.nas.player.PlayerController
+import com.musicbox.nas.ui.components.DockItem
+import com.musicbox.nas.ui.components.GlassMiniPlayer
+import com.musicbox.nas.ui.components.LiquidGlassDock
 import com.musicbox.nas.ui.components.MiniPlayer
 import com.musicbox.nas.ui.screens.LibraryScreen
 import com.musicbox.nas.ui.screens.PlaylistsScreen
@@ -303,7 +309,7 @@ private fun AppRoot() {
             CrashLogger.dismissCrash()
             normal = true
         }
-        MusicBoxTheme(darkTheme = diagDark) {
+        MusicBoxTheme(darkTheme = diagDark, accent = androidx.compose.ui.graphics.Color(0xFF000000.toInt() or MusicBoxApp.instance.accentColor.value)) {
             SystemBarColors(diagDark)
             DiagnosticsScreen(
                 log = logText,
@@ -438,7 +444,8 @@ private fun AppRoot() {
         }
     }
 
-    MusicBoxTheme(darkTheme = dark) {
+    val accentArgb by MusicBoxApp.instance.accentColor.collectAsState()
+    MusicBoxTheme(darkTheme = dark, accent = androidx.compose.ui.graphics.Color(0xFF000000.toInt() or accentArgb)) {
         val immersiveNow = fullScreen || onPlayer
         // 沉浸页由 Activity 统一接管系统栏（透明 + 隐藏）。这里必须跳过，
         // 否则 SystemBarColors 会把状态栏重新设成不透明色，并因此触发一次窗口属性重排，
@@ -453,7 +460,13 @@ private fun AppRoot() {
         // 窗口常驻 edge-to-edge，所以普通页面要自己避让系统栏（状态栏 + 导航栏）；
         // 沉浸页不加 padding，内容直接铺满整屏——这样「进入播放页」不再有窗口布局切换，
         // 顶部也就不会残留一条与状态栏等高的黑带。
-        Column(
+        // 悬浮外壳（Dock + 迷你播放器）浮在内容之上，内容区按实测高度留出空位，
+        // 这样列表最后一项不会被 Dock 盖住，Dock 也始终悬在底部而不是挤占布局。
+        val shellVisible = !onPlayer && !fullScreen
+        var shellHeight by remember { mutableStateOf(0.dp) }
+        val density = LocalDensity.current
+
+        Box(
             Modifier
                 .fillMaxSize()
                 .background(rootBg)
@@ -464,6 +477,7 @@ private fun AppRoot() {
                         .navigationBarsPadding()
                 )
         ) {
+            Column(Modifier.fillMaxSize()) {
             Box(
                 Modifier
                     .weight(1f)
@@ -509,13 +523,20 @@ private fun AppRoot() {
             // 不再牵动整个 AppRoot（含 NavHost）跟着重组。
             if (!onPlayer) PlayErrorBanner()
 
-            if (!onPlayer && !fullScreen) {
-                MiniPlayer { navController.navigate("player") }
-            }
+            // 底部留白 = 悬浮外壳的实测高度，最后一项才不会被遮住
+            if (shellVisible) Spacer(Modifier.height(shellHeight))
+        }
 
-            if (!onPlayer && !fullScreen) {
-                BottomBar(navController)
+        if (shellVisible) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .onSizeChanged { shellHeight = with(density) { it.height.toDp() } }
+            ) {
+                ShellBottom(navController, route)
             }
+        }
         }
     }
 }
@@ -660,40 +681,69 @@ private fun DiagnosticsScreen(
     }
 }
 
+/**
+ * 底部悬浮外壳：玻璃迷你播放器 + 液态玻璃 Dock。
+ *
+ * 只在这里订阅播放状态（队列 / 播放中 / 进度）：外面的 NavHost 不会因为进度变化重组。
+ */
 @Composable
-private fun BottomBar(navController: NavController) {
-    val backStack by navController.currentBackStackEntryAsState()
-    val route = backStack?.destination?.route
-    val items = listOf("library" to "曲库", "playlists" to "歌单", "settings" to "设置")
-    // 紧凑底栏：默认 NavigationBar 是 80dp，占屏幕太多；这里压到 58dp 并收紧图标/文字。
-    NavigationBar(
-        modifier = Modifier.height(58.dp),
-        windowInsets = WindowInsets(0, 0, 0, 0),
-        tonalElevation = 0.dp
+private fun ShellBottom(navController: NavController, route: String?) {
+    val queue by PlayerController.queue.collectAsState()
+    val idx by PlayerController.currentIndex.collectAsState()
+    val isPlaying by PlayerController.isPlaying.collectAsState()
+    val position by PlayerController.position.collectAsState()
+    val duration by PlayerController.duration.collectAsState()
+    val current = if (idx in queue.indices) queue[idx] else null
+    val progress = if (duration > 0L) position.toFloat() / duration.toFloat() else 0f
+
+    val items = listOf(
+        DockItem("library", "曲库", Icons.Default.LibraryMusic),
+        DockItem("playlists", "歌单", Icons.Default.QueueMusic),
+        DockItem("settings", "设置", Icons.Default.Settings)
+    )
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(top = 8.dp, bottom = 10.dp)
     ) {
-        items.forEach { (r, label) ->
-            NavigationBarItem(
-                selected = route == r,
-                onClick = {
+        AnimatedVisibility(
+            visible = current != null,
+            enter = slideInVertically(tween(240)) { it / 2 } + fadeIn(tween(180)),
+            exit = slideOutVertically(tween(200)) { it / 2 } + fadeOut(tween(140))
+        ) {
+            val c = current
+            if (c != null) {
+                Column {
+                    GlassMiniPlayer(
+                        title = c.title,
+                        artist = c.artist,
+                        coverUrl = c.coverUrl,
+                        embeddedAudioUrl = c.embeddedAudioUrl,
+                        isPlaying = isPlaying,
+                        progress = progress,
+                        onClick = { navController.navigate("player") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
+            }
+        }
+        LiquidGlassDock(
+            selected = items.indexOfFirst { it.route == route }.coerceAtLeast(0),
+            items = items,
+            onSelect = { index ->
+                val r = items[index].route
+                if (r != route) {
                     navController.navigate(r) {
                         popUpTo("library") { saveState = true }
                         launchSingleTop = true
                         restoreState = true
                     }
-                },
-                icon = {
-                    Icon(
-                        when (r) {
-                            "library" -> Icons.Default.Home
-                            "playlists" -> Icons.Default.QueueMusic
-                            else -> Icons.Default.Settings
-                        },
-                        contentDescription = label,
-                        modifier = Modifier.size(20.dp)
-                    )
-                },
-                label = { Text(label, style = MaterialTheme.typography.labelSmall) }
-            )
-        }
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }

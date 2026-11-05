@@ -118,6 +118,8 @@ class MusicBoxApp : Application() {
     val webDavConn = MutableStateFlow<WebDavConnection?>(null)
     val fnosConn = MutableStateFlow<FnosConnection?>(null)
     val themeMode = MutableStateFlow(ThemeMode.SYSTEM)
+    /** 主题主色（ARGB Int）。0 = 用默认品牌红。 */
+    val accentColor = MutableStateFlow(0xFA2D48)
     val sourceMode = MutableStateFlow(SourceMode.WEBDAV)
 
     /** 已保存的连接配置（含密码）：断开会话后仍保留，供表单预填与编辑，不会被清空。 */
@@ -438,6 +440,7 @@ class MusicBoxApp : Application() {
             }
         }
         p[T_THEME]?.let { runCatching { themeMode.value = ThemeMode.valueOf(it) } }
+        p[T_ACCENT]?.let { runCatching { accentColor.value = it } }
         p[S_PACE]?.let { scanPaceMs.value = it.coerceIn(0L, 2000L) }
         p[S_CONCURRENCY]?.let { scanConcurrency.value = it.toInt().coerceIn(1, 48) }
         p[T_TABS]?.let { raw ->
@@ -594,6 +597,13 @@ class MusicBoxApp : Application() {
         dataStore.edit { it[T_THEME] = mode.name }
     }
 
+    /** 切换主题主色，全应用立即换色并持久化。 */
+    suspend fun setAccentColor(argb: Int) {
+        accentColor.value = argb and 0xFFFFFF
+        dataStore.edit { it[T_ACCENT] = accentColor.value }
+        CrashLogger.info("Settings", "主题色=#%06X".format(accentColor.value))
+    }
+
     /** 切换主界面音源，立即生效并持久化。 */
     suspend fun setSource(mode: SourceMode) {
         sourceMode.value = mode
@@ -622,6 +632,7 @@ class MusicBoxApp : Application() {
         return JSONObject().apply {
             put("version", 1)
             put("theme_mode", themeMode.value.name)
+            put("accent_color", "#%06X".format(accentColor.value))
             put("source_mode", sourceMode.value.name)
             put("visible_tabs", visibleTabs.value.joinToString(","))
             put("audio_quality", audioQuality.value.name)
@@ -662,6 +673,10 @@ class MusicBoxApp : Application() {
             .getOrElse { e -> throw IllegalArgumentException("JSON 解析失败：${e.message}") }
         o.optString("theme_mode").takeIf { it.isNotBlank() }
             ?.let { runCatching { setTheme(ThemeMode.valueOf(it)) } }
+        o.optString("accent_color").takeIf { it.isNotBlank() }
+            ?.let { raw -> runCatching {
+                setAccentColor(raw.removePrefix("#").toInt(16) or 0xFF000000.toInt())
+            } }
         o.optString("source_mode").takeIf { it.isNotBlank() }
             ?.let { runCatching { setSource(SourceMode.valueOf(it)) } }
         o.optString("visible_tabs").takeIf { it.isNotBlank() }?.let { raw ->
@@ -737,6 +752,8 @@ private val F_USER = stringPreferencesKey("fnos_user")
 private val F_PASS = stringPreferencesKey("fnos_pass")
 private val F_TOKEN = stringPreferencesKey("fnos_token")
 private val T_THEME = stringPreferencesKey("theme_mode")
+/** 主题主色，存 ARGB 十进制串。 */
+private val T_ACCENT = intPreferencesKey("accent_color")
 private val S_PACE = longPreferencesKey("scan_pace_ms")
 private val S_CONCURRENCY = longPreferencesKey("scan_concurrency")
 private val S_SOURCE = stringPreferencesKey("source_mode")

@@ -10,7 +10,7 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.24-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material3-4285F4?logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![Media3](https://img.shields.io/badge/Media3-1.5.1-FF6F00)](https://developer.android.com/media/media3)
-[![Version](https://img.shields.io/badge/version-1.2.5-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 </div>
@@ -39,7 +39,7 @@ Matrix Music 不建索引库、不依赖服务端插件，直接用 WebDAV 协�
 | **播放页** | 封面与歌词整合在同一屏，滚动歌词 + 顶部小封面信息条；底部只保留上一首 / 播放 / 下一首 |
 | **交互** | CoverFlow 横屏浏览、当前播放卡片从底部升起、全量手势返回、列表返回保留原滚动位置 |
 | **音质** | 原采样率直通，或本地转 256kbps AAC 缓存（省流量、兼容老设备） |
-| **外观** | Material3 明暗主题，edge-to-edge 沉浸式，深浅色分别配色 |
+| **外观** | iOS 26 风格液态玻璃外壳（悬浮 Dock + 玻璃迷你播放器 + 玻璃播放页），内部仍是 Material 3；10 种主题色可选，深浅色分别推导 |
 
 ## 截图
 

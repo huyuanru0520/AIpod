@@ -95,6 +95,7 @@ import com.musicbox.nas.data.SourceType
 import com.musicbox.nas.data.Track
 import com.musicbox.nas.player.PlayerController
 import com.musicbox.nas.ui.components.BareCover
+import com.musicbox.nas.ui.components.GlassSurface
 import com.musicbox.nas.ui.components.CoverImage
 import com.musicbox.nas.ui.components.HiResBadge
 import com.musicbox.nas.ui.components.rememberCoverBitmap
@@ -205,7 +206,7 @@ fun PlayerScreen(navController: NavController) {
                     )
                 }
 
-                HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
+                Spacer(Modifier.height(4.dp))
 
                 BottomControls(
                     track = c,
@@ -234,10 +235,21 @@ private fun TrackHeader(
     var menu by remember { mutableStateOf(false) }
     var showArt by remember { mutableStateOf(false) }
     val context = LocalContext.current
-    Row(
-        modifier
+    // 悬浮玻璃胶囊：不再贴边，而是浮在封面背景上，像 iOS 26 的顶部工具栏
+    GlassSurface(
+        modifier = modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+        shape = RoundedCornerShape(24.dp),
+        tint = Color.Black,
+        tintAlpha = 0.34f,
+        elevation = 14.dp,
+        forceDark = true
+    ) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (track != null) {
@@ -313,6 +325,7 @@ private fun TrackHeader(
             }
         }
     }
+    }   // GlassSurface
     // 整合后大封面不再常驻，但仍可从「更多」里全屏看一眼（纯图片、无边框）
     if (showArt && track != null) {
         androidx.compose.ui.window.Dialog(onDismissRequest = { showArt = false }) {
@@ -377,12 +390,24 @@ private fun BottomControls(
     duration: Long,
     isPlaying: Boolean
 ) {
+    // 底部控制区同样做成悬浮玻璃卡片：进度条与三个按钮都在这一张卡里，
+    // 与顶部的玻璃胶囊形成上下呼应，中间留给歌词。
+    GlassSurface(
+        modifier = Modifier
+            .fillMaxWidth()
+            // 播放页保留系统栏，导航栏会占掉底部一条：卡片必须避开它
+            .navigationBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(28.dp),
+        tint = Color.Black,
+        tintAlpha = 0.32f,
+        elevation = 16.dp,
+        forceDark = true
+    ) {
     Column(
         Modifier
             .fillMaxWidth()
-            // 播放页现在保留系统栏，导航栏会占掉底部一条：按钮必须避开它
-            .navigationBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 10.dp)
+            .padding(horizontal = 18.dp, vertical = 12.dp)
     ) {
         if (track.isHiRes || track.qualityLabel.isNotBlank()) {
             HiResBadge(track, onDark = true)
@@ -436,7 +461,8 @@ private fun BottomControls(
                 )
             }
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
+    }
     }
 }
 

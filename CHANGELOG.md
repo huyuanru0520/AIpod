@@ -4,6 +4,20 @@
 
 <!-- 推到自己的仓库后，把文末 compare 链接里的 your-name 替换成实际 GitHub 用户名；或直接删掉链接定义，改为纯文本标题。 -->
 
+## [1.3.0] - 2025-11-06
+
+参考 [LynMusic](https://github.com/wesley666/LynMusic) 的 iOS 26 风格外壳，重做整体交互；内部仍是 Material 3。
+
+### Added
+- 悬浮 **液态玻璃 Dock** 取代底部导航栏：胶囊形、浮在内容之上，选中项的「药丸」高亮随点击平滑滑动。
+- 悬浮 **玻璃迷你播放器**：独立圆角卡片，含封面 / 歌名 / 播放暂停 / 下一首，底部一条主色进度线，点击整卡进入播放页。
+- 播放页顶部信息条与底部控制区改为**玻璃卡片**，浮在封面模糊背景上；中间留给滚动歌词。
+- 设置 → 外观新增 **主题色**：10 种预设色，选定后立即重建整套 Material 3 配色（深 / 浅色分别推导），并随设置一起导出导入。
+
+### Changed
+- 底部外壳按实测高度给内容留白，列表最后一项不再被 Dock 遮住。
+- 主题配色改为「单主色推导」：主色 + 黑白插值得到各级容器色，避免固定色板与自定义主色冲突。
+
 ## [1.2.5] - 2025-11-06
 
 ### Fixed
@@ -156,6 +170,7 @@
 
 初始版本：WebDAV / 飞牛 FnOS 音源接入、全库扫描与缓存、Media3 播放与通知栏控制、歌词与封面解析、CoverFlow 浏览。
 
+[1.3.0]: https://github.com/your-name/MatrixMusic/compare/v1.2.5...v1.3.0
 [1.2.5]: https://github.com/your-name/MatrixMusic/compare/v1.2.4...v1.2.5
 [1.2.4]: https://github.com/your-name/MatrixMusic/compare/v1.2.3...v1.2.4
 [1.2.3]: https://github.com/your-name/MatrixMusic/compare/v1.2.2...v1.2.3
