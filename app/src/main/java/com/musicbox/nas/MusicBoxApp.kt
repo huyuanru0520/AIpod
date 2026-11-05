@@ -1,0 +1,605 @@
+package com.musicbox.nas
+
+import android.app.Application
+import android.content.Context
+import androidx.datastore.core.DataStore
+import org.json.JSONObject
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import com.musicbox.nas.data.AuthRegistry
+import com.musicbox.nas.data.createOkHttpClient
+import com.musicbox.nas.data.createLenientOkHttpClient
+import com.musicbox.nas.data.fnos.FnosClient
+import com.musicbox.nas.data.fnos.FnosConnection
+import com.musicbox.nas.data.Track
+import com.musicbox.nas.data.webdav.DavLibrary
+import com.musicbox.nas.data.webdav.WebDavClient
+import com.musicbox.nas.data.webdav.WebDavConnection
+import com.musicbox.nas.util.CrashLogger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
+
+val Application.dataStore: DataStore<Preferences> by preferencesDataStore(name = "musicbox_prefs")
+
+enum class ThemeMode { SYSTEM, DARK, LIGHT }
+
+/** 主界面显示的音源：同一时刻只显示一种，在「设置」里切换并持久化。 */
+enum class SourceMode { WEBDAV, FNOS }
+
+/** 播放音质：原样直通，或转成 256kbps AAC（体积小、兼容老设备）。 */
+enum class AudioQuality(val label: String) {
+    ORIGINAL("原采样率 / 原码率"),
+    AAC_256("AAC 256kbps")
+}
+
+/** 主界面可勾选显示的栏目（文件夹仅 WebDAV 有）。 */
+object LibraryTabs {
+    const val SONGS = "songs"
+    const val ARTISTS = "artists"
+    const val PLAYLISTS = "playlists"
+    const val ALBUMS = "albums"
+    const val FOLDERS = "folders"
+    const val SEARCH = "search"
+
+    val all: List<Pair<String, String>> = listOf(
+        SONGS to "歌曲",
+        ARTISTS to "歌手",
+        PLAYLISTS to "歌单",
+        ALBUMS to "专辑",
+        FOLDERS to "文件夹",
+        SEARCH to "搜索"
+    )
+    val default: Set<String> get() = all.map { it.first }.toSet()
+}
+
+/** WebDAV 扫描节奏：相邻请求最小间隔 + 并行数，两者共同决定速度与风控强度。 */
+object ScanPace {
+    data class Option(val label: String, val intervalMs: Long, val concurrency: Int)
+
+    const val GENTLE_INTERVAL = 250L
+    const val GENTLE_CONCURRENCY = 3
+    const val BALANCED_INTERVAL = 120L
+    const val BALANCED_CONCURRENCY = 6
+    const val FAST_INTERVAL = 50L
+    const val FAST_CONCURRENCY = 12
+    // 极速：STRM / 自建 openlist 等无网盘风控的场景。请求间隔 0（不再匀速排队）+ 32 路并发。
+    const val TURBO_INTERVAL = 0L
+    const val TURBO_CONCURRENCY = 32
+
+    val options: List<Option> = listOf(
+        Option("温和", GENTLE_INTERVAL, GENTLE_CONCURRENCY),
+        Option("均衡", BALANCED_INTERVAL, BALANCED_CONCURRENCY),
+        Option("快速", FAST_INTERVAL, FAST_CONCURRENCY),
+        Option("极速", TURBO_INTERVAL, TURBO_CONCURRENCY)
+    )
+    /** 默认档位（均衡）：约 8 次/秒、6 路并行，兼顾速度与风控。 */
+    val default: Option get() = options[1]
+}
+
+class MusicBoxApp : Application() {
+
+    lateinit var okHttpClient: OkHttpClient
+    lateinit var authRegistry: AuthRegistry
+    lateinit var fnosClient: FnosClient
+    lateinit var webDavClient: WebDavClient
+
+    val webDavConn = MutableStateFlow<WebDavConnection?>(null)
+    val fnosConn = MutableStateFlow<FnosConnection?>(null)
+    val themeMode = MutableStateFlow(ThemeMode.SYSTEM)
+    val sourceMode = MutableStateFlow(SourceMode.WEBDAV)
+
+    /** 已保存的连接配置（含密码）：断开会话后仍保留，供表单预填与编辑，不会被清空。 */
+    val savedWebDav = MutableStateFlow<WebDavConnection?>(null)
+    val savedFnos = MutableStateFlow<FnosConnection?>(null)
+    val fnosLoggedIn = MutableStateFlow(false)
+
+    /** WebDAV 全库扫描结果：落盘缓存，冷启动直接恢复，避免每次开 App 都全库扫描。 */
+    val webDavLibrary = MutableStateFlow<DavLibrary?>(null)
+    val webDavScanProgress = MutableStateFlow("")
+    val webDavScanning = MutableStateFlow(false)
+    /** 一次进程生命周期内最多自动全库扫描一次；失败也不反复重试冲击网盘。 */
+    val webDavAutoScanAttempted = MutableStateFlow(false)
+    /** 扫描过程中实时回传的「已找到歌曲」列表，每次扫描开始清空，供曲库页实时展示。 */
+    val webDavScanFound = MutableStateFlow<List<Track>>(emptyList())
+    /** 相邻请求最小间隔（ms），设置页可调，默认均衡档。 */
+    val scanPaceMs = MutableStateFlow(ScanPace.BALANCED_INTERVAL)
+    /** 并行 PROPFIND 数：真正的并发，默认均衡档 6 路，越大扫描越快但越易触发限流。 */
+    val scanConcurrency = MutableStateFlow(ScanPace.BALANCED_CONCURRENCY)
+    /** 主界面显示哪些栏目（歌曲/歌手/歌单/专辑/文件夹/搜索），设置里可勾选。 */
+    val visibleTabs = MutableStateFlow(LibraryTabs.default)
+    /** 播放音质：默认原采样率直通。 */
+    val audioQuality = MutableStateFlow(AudioQuality.ORIGINAL)
+    /**
+     * 调试模式（默认关闭）。开启后全量运行日志才会写盘 / 输出到下载目录；
+     * 关闭时调试日志完全停用（仅 Logcat 静默），也可在设置里手动切换。
+     */
+    val debugMode = MutableStateFlow(false)
+    /**
+     * 横屏 Cover Flow / 由其打开的专辑列表是否为「全屏沉浸」态。
+     * 为 true 时 MainActivity 隐藏底部导航与 MiniPlayer，并切到沉浸式系统栏。
+     */
+    val fullScreenMode = MutableStateFlow(false)
+    @Volatile private var lastScanStartMs = 0L
+
+    /**
+     * App 级作用域：扫描不随页面销毁而取消。
+     * 之前扫描由曲库页/Settings 的 rememberCoroutineScope 启动，切 Tab、退出页面就中断，
+     * 表现为「扫描到一半就停了」。现在统一挂在这里，退到后台也继续跑完。
+     */
+    private val appScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    /** 从任意页面发起扫描（不阻塞调用方，页面退出也不取消）。 */
+    fun startWebDavScan(conn: WebDavConnection, automatic: Boolean = false) {
+        if (webDavScanning.value) return
+        if (automatic && webDavAutoScanAttempted.value) return
+        appScope.launch {
+            runCatching { refreshWebDavLibrary(conn, automatic) }
+                .onFailure { CrashLogger.info("WebDAV", "扫描任务结束：${it.message}") }
+        }
+    }
+
+    /**
+     * 递归扫描 WebDAV 并生成「所有歌曲 / 专辑 / 歌手 / 歌单」分类索引。
+     * automatic=true 时表示页面自动触发，整个进程只允许一次；手动扫描不受限制。
+     */
+    suspend fun refreshWebDavLibrary(conn: WebDavConnection, automatic: Boolean = false) {
+        if (webDavScanning.value) return
+        if (automatic && webDavAutoScanAttempted.value) return
+        // 手动扫描也做 1.5 秒防连点：日志里曾出现 1 秒内连发 5 次全库扫描，
+        // 在 401 的情况下这只会被服务器判为异常流量并升级为 429。
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!automatic && now - lastScanStartMs < 1500L) return
+        lastScanStartMs = now
+        if (automatic) webDavAutoScanAttempted.value = true
+        webDavScanning.value = true
+        webDavScanFound.value = emptyList() // 每次扫描开始清空实时列表
+        // 前台服务保活：退到后台/锁屏时扫描继续，通知栏显示进度
+        com.musicbox.nas.scan.ScanService.start(this)
+        try {
+            webDavScanProgress.value = "正在并行递归扫描 WebDAV…"
+            val result = webDavClient.scanLibrary(
+                conn, scanPaceMs.value, scanConcurrency.value,
+                onProgress = { msg -> webDavScanProgress.value = msg },
+                onBatch = { found -> webDavScanFound.value = found }
+            )
+            webDavLibrary.value = result
+            webDavScanFound.value = emptyList()
+            saveDavLibraryCache(result)
+            webDavScanProgress.value =
+                "扫描完成：${result.tracks.size} 首歌曲 / ${result.albums.size} 张专辑 / " +
+                    "${result.artists.size} 位歌手 / ${result.playlists.size} 个歌单" +
+                    (if (result.failedDirs > 0) "（${result.failedDirs} 个目录无权限已跳过）" else "") +
+                    (result.note?.let { "；$it" } ?: "")
+            CrashLogger.info("WebDAV", webDavScanProgress.value)
+        } catch (e: Exception) {
+            if (e is kotlin.coroutines.cancellation.CancellationException) {
+                // 页面退出导致的正常取消（LeftCompositionCancellationException），不算错误
+                webDavScanProgress.value = "扫描已取消"
+                throw e
+            }
+            CrashLogger.error("WebDAV.scan", e)
+            webDavScanProgress.value = "扫描失败：${e.message ?: e::class.java.simpleName}"
+            throw e
+        } finally {
+            webDavScanning.value = false
+            com.musicbox.nas.scan.ScanService.stop(this)
+        }
+    }
+
+    // ---- WebDAV 索引落盘缓存：冷启动不再重复全库扫描（这是最容易被网盘判定为异常的行为） ----
+
+    private fun davCacheFile() = java.io.File(filesDir, "dav_library.cache")
+
+    private suspend fun restoreDavLibraryCache() {
+        val f = davCacheFile()
+        if (!f.exists()) return
+        val cached = runCatching {
+            java.io.ObjectInputStream(f.inputStream()).use { it.readObject() as? DavLibrary }
+        }.getOrElse {
+            CrashLogger.error("WebDAV.cache.read", it)
+            runCatching { f.delete() }
+            null
+        }
+        if (cached != null) {
+            webDavLibrary.value = cached
+            webDavAutoScanAttempted.value = true
+            webDavScanProgress.value =
+                "已加载上次扫描的索引：${cached.tracks.size} 首歌曲 · ${cached.albums.size} 张专辑 · " +
+                    "${cached.artists.size} 位歌手 · ${cached.playlists.size} 个歌单（如需更新请手动扫描）"
+            CrashLogger.info("WebDAV", "从缓存恢复索引，跳过本次自动全库扫描：${cached.tracks.size} 首歌曲")
+        }
+    }
+
+    private suspend fun saveDavLibraryCache(lib: DavLibrary) {
+        runCatching {
+            java.io.ObjectOutputStream(davCacheFile().outputStream()).use { it.writeObject(lib) }
+        }.onFailure { CrashLogger.error("WebDAV.cache.write", it) }
+    }
+
+    private suspend fun clearDavLibraryCache() {
+        runCatching { davCacheFile().delete() }
+    }
+
+    /** 设置页调整扫描节奏（间隔 + 并行数），持久化后下一次扫描生效。 */
+    suspend fun setScanPace(intervalMs: Long, concurrency: Int) {
+        scanPaceMs.value = intervalMs.coerceIn(0L, 2000L)
+        scanConcurrency.value = concurrency.coerceIn(1, 48)
+        dataStore.edit {
+            it[S_PACE] = scanPaceMs.value
+            it[S_CONCURRENCY] = scanConcurrency.value.toLong()
+        }
+        CrashLogger.info("Settings", "WebDAV 扫描节奏=${scanPaceMs.value}ms/请求 · 并行=${scanConcurrency.value}")
+    }
+
+    /** 勾选主界面要显示的栏目；至少保留一个，避免整页空白。 */
+    suspend fun setVisibleTabs(tabs: Set<String>) {
+        val safe = tabs.filter { LibraryTabs.all.any { t -> t.first == it } }.toSet()
+        visibleTabs.value = if (safe.isEmpty()) setOf(LibraryTabs.SONGS) else safe
+        CrashLogger.info("Settings", "主界面栏目=${visibleTabs.value.joinToString(",")}")
+        dataStore.edit { it[T_TABS] = visibleTabs.value.joinToString(",") }
+    }
+
+    suspend fun setAudioQuality(q: AudioQuality) {
+        audioQuality.value = q
+        CrashLogger.info("Settings", "播放音质=${q.label}")
+        dataStore.edit { it[Q_QUALITY] = q.name }
+    }
+
+    companion object {
+        lateinit var instance: MusicBoxApp
+            private set
+    }
+
+    /** 比 onCreate 更早：ContentProvider 初始化之前就装好崩溃处理器。 */
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(base)
+        CrashLogger.install(base)
+        CrashLogger.mark("attachBaseContext")
+    }
+
+    override fun onCreate() {
+        CrashLogger.mark("Application.onCreate enter")
+        super.onCreate()
+        instance = this
+        CrashLogger.mark("clients init start")
+        runCatching {
+            authRegistry = AuthRegistry()
+            okHttpClient = createOkHttpClient(authRegistry)
+            // 飞牛走宽松 HTTPS 客户端：信任自签证书 + 兼容旧 TLS，避免自托管/反代握手失败
+            fnosClient = FnosClient(createLenientOkHttpClient(authRegistry), authRegistry)
+            webDavClient = WebDavClient(okHttpClient, authRegistry)
+        }.onFailure { CrashLogger.error("init-clients", it) }
+        CrashLogger.mark("clients init done")
+
+        // 把版本号写进日志：以后拿到日志即可确认用户实际安装的是哪一版，避免装错旧包
+        val version = runCatching {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+        }.getOrDefault("?")
+        CrashLogger.info("App", "应用版本=$version / package=$packageName")
+
+        // 会话恢复改为后台异步：不在主线程做磁盘 I/O，也不让持久化异常拖垮冷启动
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching { restoreSessions() }
+                .onFailure { CrashLogger.error("restore-sessions", it) }
+        }
+        CrashLogger.mark("Application.onCreate done")
+    }
+
+    // 保留这些方法供其他模块调用，内部统一委托给 CrashLogger
+    fun recordError(tag: String, t: Throwable) = CrashLogger.error(tag, t)
+    fun readCrashLog(): String? = CrashLogger.read()
+    fun clearCrashLog() = CrashLogger.clear()
+
+    private suspend fun restoreSessions() {
+        if (!::webDavClient.isInitialized || !::fnosClient.isInitialized) return
+        val p = dataStore.data.first()
+        val wHost = p[W_HOST]
+        if (!wHost.isNullOrBlank()) {
+            val conn = WebDavConnection(
+                host = wHost,
+                port = p[W_PORT] ?: 0,
+                useHttps = p[W_HTTPS] ?: false,
+                username = p[W_USER] ?: "",
+                password = p[W_PASS] ?: "",
+                rootPath = p[W_PATH] ?: "/",
+                backupHost = p[W_BHOST],
+                backupPort = p[W_BPORT] ?: 0,
+                backupUseHttps = p[W_BHTTPS] ?: false
+            )
+            savedWebDav.value = conn
+            webDavClient.registerAuth(conn)
+            webDavConn.value = conn
+        }
+        val fHost = p[F_HOST]
+        val fToken = p[F_TOKEN]
+        if (!fHost.isNullOrBlank()) {
+            val conn = FnosConnection(
+                host = fHost,
+                port = p[F_PORT] ?: 5666,
+                useHttps = p[F_HTTPS] ?: false,
+                username = p[F_USER] ?: "",
+                password = p[F_PASS] ?: "",
+                backupHost = p[F_BHOST],
+                backupPort = p[F_BPORT] ?: 0,
+                backupUseHttps = p[F_BHTTPS] ?: false
+            )
+            savedFnos.value = conn
+            if (!fToken.isNullOrBlank()) {
+                fnosClient.setSession(conn, fToken)
+                fnosConn.value = conn
+                fnosLoggedIn.value = true
+            }
+        }
+        p[T_THEME]?.let { runCatching { themeMode.value = ThemeMode.valueOf(it) } }
+        p[S_PACE]?.let { scanPaceMs.value = it.coerceIn(0L, 2000L) }
+        p[S_CONCURRENCY]?.let { scanConcurrency.value = it.toInt().coerceIn(1, 48) }
+        p[T_TABS]?.let { raw ->
+            val set = raw.split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
+            if (set.isNotEmpty()) visibleTabs.value = set
+        }
+        p[Q_QUALITY]?.let { runCatching { audioQuality.value = AudioQuality.valueOf(it) } }
+        // 调试模式：从持久化读取并同步给 CrashLogger（默认关闭，避免常驻日志 I/O）
+        val dbg = p[D_DEBUG] ?: false
+        debugMode.value = dbg
+        CrashLogger.setEnabled(dbg)
+        val savedSource = p[S_SOURCE]
+        if (savedSource != null) {
+            runCatching { sourceMode.value = SourceMode.valueOf(savedSource) }
+        } else {
+            // 首次启动：优先展示已经登录、能立刻出内容的音源
+            sourceMode.value = if (fnosLoggedIn.value && webDavConn.value == null)
+                SourceMode.FNOS else SourceMode.WEBDAV
+        }
+        // 有缓存就直接恢复索引，冷启动不再发起整库 PROPFIND
+        restoreDavLibraryCache()
+        CrashLogger.mark(
+            "restoreSessions done (webdav=${webDavConn.value != null}, " +
+                "fnos=${fnosLoggedIn.value}, theme=${themeMode.value}, source=${sourceMode.value}, " +
+                "davCache=${webDavLibrary.value != null})"
+        )
+    }
+
+    // ---- WebDAV persistence ----
+
+    /** 保存（或更新）WebDAV 配置并连接。传 null 等价于「断开但保留配置」。 */
+    suspend fun saveWebDav(conn: WebDavConnection?) {
+        if (conn == null) {
+            disconnectWebDav()
+            return
+        }
+        CrashLogger.info("Settings", "保存 WebDAV ${conn.baseUrl}")
+        savedWebDav.value = conn
+        webDavConn.value = conn
+        webDavClient.registerAuth(conn)
+        // 配置变化后旧索引失效：删缓存，并允许新配置自动扫描一次
+        webDavLibrary.value = null
+        clearDavLibraryCache()
+        webDavAutoScanAttempted.value = false
+        dataStore.edit { p ->
+            p[W_HOST] = conn.host
+            p[W_PORT] = conn.port
+            p[W_HTTPS] = conn.useHttps
+            p[W_USER] = conn.username
+            p[W_PASS] = conn.password
+            p[W_PATH] = conn.rootPath
+            if (conn.backupHost.isNullOrBlank()) {
+                p.remove(W_BHOST); p.remove(W_BPORT); p.remove(W_BHTTPS)
+            } else {
+                p[W_BHOST] = conn.backupHost
+                p[W_BPORT] = conn.backupPort
+                p[W_BHTTPS] = conn.backupUseHttps
+            }
+        }
+    }
+
+    /** 断开当前会话，但保留已保存的地址 / 账号 / 密码 / 路径，下次可直接编辑重连。 */
+    suspend fun disconnectWebDav() {
+        CrashLogger.info("Settings", "断开 WebDAV（保留已保存配置）")
+        val previous = webDavConn.value
+        webDavConn.value = null
+        previous?.let { authRegistry.remove(it.baseUrl) }
+        webDavLibrary.value = null
+        webDavScanProgress.value = ""
+    }
+
+    // ---- FnOS persistence ----
+
+    suspend fun saveFnos(conn: FnosConnection?, token: String?) {
+        if (conn == null || token.isNullOrBlank()) {
+            logoutFnos()
+            return
+        }
+        CrashLogger.info("Settings", "保存飞牛音乐 ${conn.baseUrl}")
+        savedFnos.value = conn
+        fnosConn.value = conn
+        fnosLoggedIn.value = true
+        fnosClient.setSession(conn, token)
+        dataStore.edit {
+            it[F_HOST] = conn.host
+            it[F_PORT] = conn.port
+            it[F_HTTPS] = conn.useHttps
+            it[F_USER] = conn.username
+            it[F_PASS] = conn.password
+            it[F_TOKEN] = token
+            if (conn.backupHost.isNullOrBlank()) {
+                it.remove(F_BHOST); it.remove(F_BPORT); it.remove(F_BHTTPS)
+            } else {
+                it[F_BHOST] = conn.backupHost
+                it[F_BPORT] = conn.backupPort
+                it[F_BHTTPS] = conn.backupUseHttps
+            }
+        }
+    }
+
+    /** 退出登录只清除 token，保留地址 / 账号 / 密码，打开表单即可看到并修改。 */
+    suspend fun logoutFnos() {
+        CrashLogger.info("Settings", "退出飞牛音乐（保留已保存配置）")
+        fnosClient.logout()
+        fnosConn.value = null
+        fnosLoggedIn.value = false
+        dataStore.edit { it.remove(F_TOKEN) }
+    }
+
+    suspend fun setTheme(mode: ThemeMode) {
+        themeMode.value = mode
+        dataStore.edit { it[T_THEME] = mode.name }
+    }
+
+    /** 切换主界面音源，立即生效并持久化。 */
+    suspend fun setSource(mode: SourceMode) {
+        sourceMode.value = mode
+        dataStore.edit { it[S_SOURCE] = mode.name }
+        CrashLogger.info("Settings", "切换音乐源=$mode（主界面只显示该音源）")
+    }
+
+    /** 切换调试模式：持久化 + 同步给 CrashLogger（开/关日志写盘）。 */
+    suspend fun setDebugMode(on: Boolean) {
+        debugMode.value = on
+        dataStore.edit { it[D_DEBUG] = on }
+        CrashLogger.setEnabled(on)
+    }
+
+    // ---- 设置 JSON 导出 / 导入 ----
+
+    /**
+     * 导出全部设置（含连接配置、外观、音源、栏目、音质、调试模式、扫描参数）为格式化 JSON 文本。
+     * 密码 / token 一并导出（本地文件，用户自行保管）。
+     */
+    suspend fun exportSettings(): String {
+        val p = dataStore.data.first()
+        val w = savedWebDav.value
+        val f = savedFnos.value
+        val fToken = p[F_TOKEN].orEmpty()
+        return JSONObject().apply {
+            put("version", 1)
+            put("theme_mode", themeMode.value.name)
+            put("source_mode", sourceMode.value.name)
+            put("visible_tabs", visibleTabs.value.joinToString(","))
+            put("audio_quality", audioQuality.value.name)
+            put("debug_mode", debugMode.value)
+            put("scan_pace_ms", scanPaceMs.value)
+            put("scan_concurrency", scanConcurrency.value)
+            put("webdav", JSONObject().apply {
+                put("host", w?.host.orEmpty())
+                put("port", w?.port ?: 0)
+                put("https", w?.useHttps ?: false)
+                put("user", w?.username.orEmpty())
+                put("pass", w?.password.orEmpty())
+                put("path", w?.rootPath ?: "/")
+                put("backup_host", w?.backupHost.orEmpty())
+                put("backup_port", w?.backupPort ?: 0)
+                put("backup_https", w?.backupUseHttps ?: false)
+            })
+            put("fnos", JSONObject().apply {
+                put("host", f?.host.orEmpty())
+                put("port", f?.port ?: 5666)
+                put("https", f?.useHttps ?: false)
+                put("user", f?.username.orEmpty())
+                put("pass", f?.password.orEmpty())
+                put("backup_host", f?.backupHost.orEmpty())
+                put("backup_port", f?.backupPort ?: 0)
+                put("backup_https", f?.backupUseHttps ?: false)
+                put("token", fToken)
+            })
+        }.toString(2)
+    }
+
+    /**
+     * 从 JSON 文本导入设置并逐项正确应用 / 持久化。
+     * 缺字段不报错（用当前值兜底）；解析失败抛出带说明的异常。
+     */
+    suspend fun importSettings(json: String) {
+        val o = runCatching { JSONObject(json) }
+            .getOrElse { e -> throw IllegalArgumentException("JSON 解析失败：${e.message}") }
+        o.optString("theme_mode").takeIf { it.isNotBlank() }
+            ?.let { runCatching { setTheme(ThemeMode.valueOf(it)) } }
+        o.optString("source_mode").takeIf { it.isNotBlank() }
+            ?.let { runCatching { setSource(SourceMode.valueOf(it)) } }
+        o.optString("visible_tabs").takeIf { it.isNotBlank() }?.let { raw ->
+            val set = raw.split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
+            if (set.isNotEmpty()) setVisibleTabs(set)
+        }
+        o.optString("audio_quality").takeIf { it.isNotBlank() }
+            ?.let { runCatching { setAudioQuality(AudioQuality.valueOf(it)) } }
+        if (o.has("debug_mode")) setDebugMode(o.optBoolean("debug_mode"))
+        if (o.has("scan_pace_ms")) scanPaceMs.value = o.optLong("scan_pace_ms").coerceIn(0L, 2000L)
+        if (o.has("scan_concurrency")) scanConcurrency.value = o.optInt("scan_concurrency").coerceIn(1, 48)
+        // WebDAV
+        o.optJSONObject("webdav")?.let { w ->
+            val host = w.optString("host", "").trim()
+            if (host.isNotBlank()) {
+                saveWebDav(
+                    WebDavConnection(
+                        host = host,
+                        port = w.optInt("port", 0),
+                        useHttps = w.optBoolean("https", false),
+                        username = w.optString("user", ""),
+                        password = w.optString("pass", ""),
+                        rootPath = w.optString("path", "/").ifBlank { "/" },
+                        backupHost = w.optString("backup_host", "").takeIf { it.isNotBlank() },
+                        backupPort = w.optInt("backup_port", 0),
+                        backupUseHttps = w.optBoolean("backup_https", false)
+                    )
+                )
+            } else disconnectWebDav()
+        }
+        // 飞牛音乐
+        o.optJSONObject("fnos")?.let { f ->
+            val host = f.optString("host", "").trim()
+            val token = f.optString("token", "").trim()
+            if (host.isNotBlank()) {
+                saveFnos(
+                    FnosConnection(
+                        host = host,
+                        port = f.optInt("port", 5666),
+                        useHttps = f.optBoolean("https", false),
+                        username = f.optString("user", ""),
+                        password = f.optString("pass", ""),
+                        backupHost = f.optString("backup_host", "").takeIf { it.isNotBlank() },
+                        backupPort = f.optInt("backup_port", 0),
+                        backupUseHttps = f.optBoolean("backup_https", false)
+                    ),
+                    token.ifBlank { null }
+                )
+            } else logoutFnos()
+        }
+    }
+}
+
+// 会话持久化键：顶层私有属性（Kotlin 每个类只允许一个 companion object）
+private val W_HOST = stringPreferencesKey("webdav_host")
+private val W_PORT = intPreferencesKey("webdav_port")
+private val W_HTTPS = booleanPreferencesKey("webdav_https")
+private val W_USER = stringPreferencesKey("webdav_user")
+private val W_PASS = stringPreferencesKey("webdav_pass")
+private val W_PATH = stringPreferencesKey("webdav_path")
+private val W_BHOST = stringPreferencesKey("webdav_backup_host")
+private val W_BPORT = intPreferencesKey("webdav_backup_port")
+private val W_BHTTPS = booleanPreferencesKey("webdav_backup_https")
+private val F_HOST = stringPreferencesKey("fnos_host")
+private val F_PORT = intPreferencesKey("fnos_port")
+private val F_HTTPS = booleanPreferencesKey("fnos_https")
+private val F_BHOST = stringPreferencesKey("fnos_backup_host")
+private val F_BPORT = intPreferencesKey("fnos_backup_port")
+private val F_BHTTPS = booleanPreferencesKey("fnos_backup_https")
+private val F_USER = stringPreferencesKey("fnos_user")
+private val F_PASS = stringPreferencesKey("fnos_pass")
+private val F_TOKEN = stringPreferencesKey("fnos_token")
+private val T_THEME = stringPreferencesKey("theme_mode")
+private val S_PACE = longPreferencesKey("scan_pace_ms")
+private val S_CONCURRENCY = longPreferencesKey("scan_concurrency")
+private val S_SOURCE = stringPreferencesKey("source_mode")
+private val T_TABS = stringPreferencesKey("visible_tabs")
+private val Q_QUALITY = stringPreferencesKey("audio_quality")
+private val D_DEBUG = booleanPreferencesKey("debug_mode")
