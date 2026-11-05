@@ -59,6 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.musicbox.nas.ui.components.CoverImage
 import androidx.navigation.NavController
+import com.musicbox.nas.BuildConfig
 import com.musicbox.nas.MusicBoxApp
 import com.musicbox.nas.ScanPace
 import com.musicbox.nas.SourceMode
@@ -171,7 +172,7 @@ fun SettingsScreen(navController: NavController) {
     }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text("设置 · v1.1.1", style = MaterialTheme.typography.headlineSmall)
+        Text("设置 · v${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Text("外观", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -370,27 +371,6 @@ fun SettingsScreen(navController: NavController) {
         importMsg?.let {
             Spacer(Modifier.height(6.dp))
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-        }
-
-        Spacer(Modifier.height(20.dp))
-        Text("调试模式", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "关闭时完全停用运行日志（不生成日志文件、不写下载目录），减少常驻 I/O；" +
-                "需要排查问题时打开它，复现后把下载目录的 NASMusic_log.txt 发回即可。" +
-                "崩溃日志无论开关都会保留，用于致命问题兜底。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.height(8.dp))
-        Row(
-            Modifier.fillMaxWidth()
-                .clickable { scope.launch { app.setDebugMode(!debugMode) } }
-                .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("启用调试日志", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-            Switch(checked = debugMode, onCheckedChange = { scope.launch { app.setDebugMode(it) } })
         }
 
         Spacer(Modifier.height(20.dp))
@@ -640,99 +620,113 @@ fun SettingsScreen(navController: NavController) {
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("运行日志", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(8.dp))
+        Text("调试模式", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(6.dp))
         Text(
-            "固定文件：/storage/emulated/0/Download/NASMusic_log.txt\n$logInfo",
+            "关闭时完全停用运行日志（不生成日志文件、不写下载目录），并隐藏下方日志工具，" +
+                "减少常驻 I/O；需要排查问题时打开它，复现后把下载目录的 NASMusic_log.txt 发回即可。" +
+                "崩溃日志无论开关都会保留，用于致命问题兜底。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        if (!debugMode) {
-            Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth()
+                .clickable { scope.launch { app.setDebugMode(!debugMode) } }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("启用调试日志", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Switch(checked = debugMode, onCheckedChange = { scope.launch { app.setDebugMode(it) } })
+        }
+
+        // 调试模式关闭时整块隐藏：不显示日志路径、按钮与预览，设置页更干净。
+        if (debugMode) {
+            Spacer(Modifier.height(20.dp))
+            Text("运行日志", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
             Text(
-                "调试模式当前为「关闭」，运行日志已停用（不会生成日志文件）。打开上方开关并重现问题后，" +
-                    "再点下方按钮即可刷新 / 导出日志。",
+                "固定文件：/storage/emulated/0/Download/NASMusic_log.txt\n$logInfo",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
-        Spacer(Modifier.height(8.dp))
-        Row {
-            Button(onClick = {
-                scope.launch {
-                    val info = withContext(Dispatchers.IO) {
-                        CrashLogger.exportNow()
-                        CrashLogger.logFileInfo()
-                    }
-                    logInfo = info
-                    val text = withContext(Dispatchers.IO) {
-                        CrashLogger.fullText().ifBlank { "（暂无日志记录）" }
-                    }
-                    runCatching {
-                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("NASMusic 日志", text))
-                    }
-                    Toast.makeText(context, "日志已刷新并复制", Toast.LENGTH_SHORT).show()
-                }
-            }) { Text("刷新并复制全部日志") }
-        }
-        Spacer(Modifier.height(8.dp))
-        Row {
-            Button(onClick = {
-                scope.launch {
-                    logPreview = withContext(Dispatchers.IO) { CrashLogger.read().orEmpty() }
-                    showLog = !showLog
-                }
-            }) { Text(if (showLog) "隐藏日志内容" else "查看日志内容") }
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = { saveLauncher.launch("NASMusic_log.txt") }) {
-                Text("另存为…")
-            }
-        }
-        if (showLog) {
             Spacer(Modifier.height(8.dp))
+            Row {
+                Button(onClick = {
+                    scope.launch {
+                        val info = withContext(Dispatchers.IO) {
+                            CrashLogger.exportNow()
+                            CrashLogger.logFileInfo()
+                        }
+                        logInfo = info
+                        val text = withContext(Dispatchers.IO) {
+                            CrashLogger.fullText().ifBlank { "（暂无日志记录）" }
+                        }
+                        runCatching {
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("NASMusic 日志", text))
+                        }
+                        Toast.makeText(context, "日志已刷新并复制", Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("刷新并复制全部日志") }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row {
+                Button(onClick = {
+                    scope.launch {
+                        logPreview = withContext(Dispatchers.IO) { CrashLogger.read().orEmpty() }
+                        showLog = !showLog
+                    }
+                }) { Text(if (showLog) "隐藏日志内容" else "查看日志内容") }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = { saveLauncher.launch("NASMusic_log.txt") }) {
+                    Text("另存为…")
+                }
+            }
+            if (showLog) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    logPreview.takeLast(8000).ifBlank { "（暂无日志）" },
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(8.dp)
+                )
+            }
             Text(
-                logPreview.takeLast(8000).ifBlank { "（暂无日志）" },
-                fontFamily = FontFamily.Monospace,
+                "日志从应用启动起持续记录全部运行事件（版本、登录、扫描、播放、切歌、错误），" +
+                    "不依赖是否发生异常，启动即在下载目录生成同名文件；同名覆盖。\n" +
+                    "日志头部会写明应用版本，反馈问题时请一并附上，方便确认实际安装的版本。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(8.dp)
+                modifier = Modifier.padding(top = 6.dp)
             )
         }
-        Text(
-            "日志从应用启动起持续记录全部运行事件（版本、登录、扫描、播放、切歌、错误），" +
-                "不依赖是否发生异常，启动即在下载目录生成同名文件；同名覆盖。\n" +
-                "日志头部会写明应用版本，反馈问题时请一并附上，方便确认实际安装的版本。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 6.dp)
-        )
 
         Spacer(Modifier.height(20.dp))
         Text("关于", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Matrix Music v1.1.1\n\n" +
-                "• 基于 Jetpack Compose + Material Design 3\n" +
-                "• 连接信息统一在「设置 → 连接管理」编辑，主界面只显示曲库\n" +
-                "• 在「设置 → 音乐源」选择飞牛音乐或 WebDAV，主界面只显示所选音源\n" +
-                "• 曲库五个分类（歌曲 / 歌手 / 歌单 / 专辑 / 搜索）支持左右滑动切换\n" +
-                "• 歌单自动识别音源中的 M3U / M3U8（WebDAV 目录扫描、飞牛服务端歌单）\n" +
-                "• WebDAV 支持 flac / m4a(ALAC) / ape / dsf / aiff / opus 等常见格式，可在设置里手动扫描\n" +
-                "• WebDAV 递归扫描全部子目录：匀速限速 + 限流自动退避 + 索引落盘缓存，避免触发网盘风控\n" +
-                "• 设置页「测试连接 / 诊断 401」可一键区分账号密码错、路径错、WebDAV 未启用\n" +
-                "• 两种音源共用飞牛样式界面：点歌手按专辑分组，详情页可播放全部\n" +
-                "• 歌曲列表左侧显示专辑封面，歌词随播放进度自动滚动、点击可跳转\n" +
-                "• 仍支持从文件 / 网址手动导入 M3U 歌单\n" +
-                "• Media3 ExoPlayer：MediaCodec 优先 + FFmpeg 软解兜底，\n" +
-                "  支持 FLAC / WAV / ALAC(m4a) / AAC / MP3 等格式\n" +
-                "• 支持安卓手势返回：按页面逐层回退，首页退到后台而不直接退出应用\n" +
-                "• 全量运行日志固定写入 /storage/emulated/0/Download",
-            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant
+            "Matrix Music v${BuildConfig.VERSION_NAME}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        if (debugMode) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "• 基于 Jetpack Compose + Material Design 3，Media3 ExoPlayer（MediaCodec 优先 + FFmpeg 软解兜底）\n" +
+                    "• 音源：飞牛音乐 / WebDAV，连接信息统一在「设置 → 连接管理」编辑\n" +
+                    "• 曲库八个栏目（歌曲 / 歌手 / 歌单 / 专辑 / 文件夹 / 风格 / 漫游 / 搜索）可勾选并排序\n" +
+                    "• 主备线路自动切换，切换时改写索引地址，不重新扫描\n" +
+                    "• 封面与歌词优先读取文件内嵌元数据，其次同目录同名文件\n" +
+                    "• 运行日志固定写入 /storage/emulated/0/Download/NASMusic_log.txt",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         Spacer(Modifier.height(24.dp))
     }
 }

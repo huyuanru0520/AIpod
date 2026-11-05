@@ -29,8 +29,8 @@ android {
         applicationId = "com.musicbox.nas"
         minSdk = 21
         targetSdk = 34
-        versionCode = 49
-        versionName = "1.2.0"
+        versionCode = 50
+        versionName = "1.2.1"
     }
 
     signingConfigs {
@@ -66,6 +66,8 @@ android {
 
     buildFeatures {
         compose = true
+        // 设置页标题 / 关于直接读 BuildConfig.VERSION_NAME，避免升级时漏改硬编码版本号
+        buildConfig = true
     }
 
     // release 打包不跑 lintVital：离线环境下 lint-gradle 依赖常拉取不到，

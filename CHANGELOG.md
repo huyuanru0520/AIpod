@@ -4,6 +4,15 @@
 
 <!-- 推到自己的仓库后，把文末 compare 链接里的 your-name 替换成实际 GitHub 用户名；或直接删掉链接定义，改为纯文本标题。 -->
 
+## [1.2.1] - 2025-11-05
+
+### Changed
+- 设置页「调试模式」开关移到「运行日志」正前方，两者成为相邻区块；关闭调试时隐藏全部日志工具（路径、按钮、预览）与「关于」的详细说明，只显示当前版本号。
+- 版本号改为从构建配置 `BuildConfig.VERSION_NAME` 动态读取，以后升级 versionName 时设置页标题与「关于」自动同步。
+
+### Fixed
+- 设置页标题与「关于」仍硬编码 `v1.1.1`，未随 1.2.0 更新。
+
 ## [1.2.0] - 2025-11-05
 
 ### Added
@@ -112,6 +121,7 @@
 
 初始版本：WebDAV / 飞牛 FnOS 音源接入、全库扫描与缓存、Media3 播放与通知栏控制、歌词与封面解析、CoverFlow 浏览。
 
+[1.2.1]: https://github.com/your-name/MatrixMusic/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/your-name/MatrixMusic/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/your-name/MatrixMusic/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/your-name/MatrixMusic/compare/v1.1.0...v1.1.1
