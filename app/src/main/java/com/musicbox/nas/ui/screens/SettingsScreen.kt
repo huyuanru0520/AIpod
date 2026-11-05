@@ -23,11 +23,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -41,6 +44,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -215,33 +221,94 @@ fun SettingsScreen(navController: NavController) {
             modifier = Modifier.padding(top = 6.dp)
         )
 
+        // 飞牛没有公开 API 文档，不同固件版本接口差异较大：提供一次自检，
+        // 用户可在自己的 NAS 上确认风格 / 文件夹 / 漫游等分类接口是否真实存在。
+        var probeResult by remember { mutableStateOf<List<String>?>(null) }
+        TextButton(
+            onClick = {
+                scope.launch {
+                    probeResult = listOf("正在检测…")
+                    probeResult = runCatching { app.fnosClient.probeEndpoints() }
+                        .getOrElse { listOf("检测失败：${it.message}") }
+                }
+            }
+        ) { Text("检测飞牛新接口（风格 / 文件夹 / 漫游）") }
+        probeResult?.let { lines ->
+            AlertDialog(
+                onDismissRequest = { probeResult = null },
+                title = { Text("飞牛接口自检") },
+                text = {
+                    Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                        lines.forEach {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { probeResult = null }) { Text("关闭") } }
+            )
+        }
+
         Spacer(Modifier.height(20.dp))
         Text("主界面栏目", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(6.dp))
         Text(
-            "勾选主界面要显示的栏目，WebDAV 与飞牛通用；「文件夹」仅 WebDAV 有效。至少保留一个。",
+            "勾选要显示的栏目，用右侧箭头调整 Tab 顺序（对 WebDAV 与飞牛同时生效）。" +
+                "「风格」来自飞牛服务端的流派分类，WebDAV 会自动隐藏；至少保留一个。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(4.dp))
-        LibraryTabs.all.forEach { (key, label) ->
+        // 已勾选的按用户顺序排在前面，未勾选的按默认顺序跟在后面，方便随时重新勾上。
+        val shown = visibleTabs
+        val hidden = LibraryTabs.keys.filter { it !in shown }
+        val ordered = shown + hidden
+        val commit: (List<String>) -> Unit = { next -> scope.launch { app.setVisibleTabs(next) } }
+        ordered.forEach { key ->
+            val checked = key in shown
+            val idx = shown.indexOf(key)
+            val label = LibraryTabs.labelOf(key)
             Row(
                 Modifier.fillMaxWidth()
                     .clickable {
-                        scope.launch {
-                            val next = visibleTabs.toMutableSet()
-                            if (!next.add(key)) next.remove(key)
-                            app.setVisibleTabs(next)
-                        }
+                        if (checked) commit(shown.filter { it != key })
+                        else commit(shown + key)
                     }
                     .padding(vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Checkbox(checked = visibleTabs.contains(key), onCheckedChange = null)
+                Checkbox(checked = checked, onCheckedChange = null)
                 Text(
-                    if (key == LibraryTabs.FOLDERS) "$label（仅 WebDAV）" else label,
-                    style = MaterialTheme.typography.bodyMedium
+                    label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (checked) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
                 )
+                IconButton(
+                    enabled = checked && idx > 0,
+                    onClick = {
+                        val next = shown.toMutableList()
+                        java.util.Collections.swap(next, idx, idx - 1)
+                        commit(next)
+                    }
+                ) {
+                    Icon(Icons.Default.KeyboardArrowUp, contentDescription = "上移「$label」")
+                }
+                IconButton(
+                    enabled = checked && idx >= 0 && idx < shown.size - 1,
+                    onClick = {
+                        val next = shown.toMutableList()
+                        java.util.Collections.swap(next, idx, idx + 1)
+                        commit(next)
+                    }
+                ) {
+                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = "下移「$label」")
+                }
             }
         }
 

@@ -4,6 +4,18 @@
 
 <!-- 推到自己的仓库后，把文末 compare 链接里的 your-name 替换成实际 GitHub 用户名；或直接删掉链接定义，改为纯文本标题。 -->
 
+## [1.2.0] - 2025-11-05
+
+### Added
+- 飞牛音乐「风格 / 流派」分类：直接读取服务端 `/genre/list` 与 `/track/genre-detail/list`，点击风格列出曲目。
+- 新增「漫游」栏目：全曲库随机 60 首，支持换一批 / 播放全部，WebDAV 与飞牛都可用。
+- 飞牛新增「文件夹」浏览：用 `/track/list` 返回的 `audioSpec.path` 在客户端构建目录树，不依赖未公开的 `/folder/list`。
+- 设置页「检测飞牛新接口」：一键自检 8 个候选分类接口，显示当前固件上哪些真实存在。
+
+### Changed
+- 「主界面栏目」改为有序列表：勾选 + 上移/下移调整 Tab 顺序并持久化；老版本配置升级时按原顺序还原。
+- 文件夹不再只属于 WebDAV；风格仅飞牛有，WebDAV 会自动隐藏该栏目。
+
 ## [1.1.2] - 2025-11-05
 
 ### Added
@@ -100,6 +112,7 @@
 
 初始版本：WebDAV / 飞牛 FnOS 音源接入、全库扫描与缓存、Media3 播放与通知栏控制、歌词与封面解析、CoverFlow 浏览。
 
+[1.2.0]: https://github.com/your-name/MatrixMusic/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/your-name/MatrixMusic/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/your-name/MatrixMusic/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/your-name/MatrixMusic/compare/v1.0.44...v1.1.0

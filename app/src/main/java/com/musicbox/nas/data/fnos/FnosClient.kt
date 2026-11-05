@@ -81,6 +81,13 @@ data class FnosTrack(
 )
 
 @Serializable
+data class FnosGenre(
+    val guid: String = "",
+    val name: String = "",
+    val trackCount: Int? = null
+)
+
+@Serializable
 data class FnosPlaylist(
     val guid: String = "",
     val name: String = "",
@@ -503,6 +510,98 @@ class FnosClient(private val okHttp: OkHttpClient, private val registry: AuthReg
     suspend fun searchArtist(q: String, page: Int, size: Int = 50): Pair<List<FnosArtist>, Int> =
         pageOf(getJson("/search/artist", listOf("q" to q, "page" to page.toString(), "size" to size.toString()))) { parseArtist(it) }
 
+    /** 服务端「风格 / 流派」分类。飞牛原生接口：GET /genre/list。 */
+    suspend fun genreList(page: Int = 1, size: Int = 200): Pair<List<FnosGenre>, Int> {
+        val r = pageOf(
+            getJson("/genre/list", listOf("page" to page.toString(), "size" to size.toString()))
+        ) { o ->
+            FnosGenre(
+                guid = o.pickStr("guid", "GUID", "id", "genreGUID", "genreId", "name") ?: "",
+                name = o.pickStr("name", "genre", "genreName", "title") ?: "",
+                trackCount = o.pickInt("trackCount", "trackNum", "count", "songCount")
+            )
+        }
+        CrashLogger.info("FnOS", "genreList 返回 ${r.first.size} 个风格 / total=${r.second}")
+        return r
+    }
+
+    /** 某个风格下的曲目。guid 查不到时用风格名再试一次（部分服务端只认 name）。 */
+    suspend fun genreTracks(
+        genreGUID: String,
+        genreName: String = "",
+        page: Int = 1,
+        size: Int = 300
+    ): Pair<List<FnosTrack>, Int> {
+        suspend fun query(key: String, value: String) =
+            pageOf(
+                getJson(
+                    "/track/genre-detail/list",
+                    listOf(key to value, "page" to page.toString(), "size" to size.toString())
+                )
+            ) { parseTrack(it) }
+
+        var r = query("genreGUID", genreGUID)
+        if (r.first.isEmpty() && genreName.isNotBlank()) {
+            // 部分服务端只认名称；guid 缺失时 parseGenre 会把 name 当作 guid，
+            // 此时仍要用 genreName 参数再试一次，不能因为两者相等就跳过。
+            r = query("genreName", genreName)
+        }
+        CrashLogger.info("FnOS", "genreTracks($genreGUID) 返回 ${r.first.size} 首 / total=${r.second}")
+        return r
+    }
+
+    /** 拉取全量曲目：用于本地构建文件夹树与随机漫游。结果按进程缓存，见 FnosCatalog。 */
+    suspend fun allTracks(maxPages: Int = 20, pageSize: Int = 500): List<FnosTrack> {
+        val out = ArrayList<FnosTrack>(pageSize)
+        var page = 1
+        while (page <= maxPages) {
+            val (list, total) = trackList(page, pageSize)
+            out.addAll(list)
+            if (list.isEmpty() || (total > 0 && out.size >= total)) break
+            page++
+        }
+        CrashLogger.info("FnOS", "allTracks 完成：${out.size} 首 / $page 页")
+        return out
+    }
+
+    /**
+     * 接口自检：逐个探测新版飞牛音乐可能提供的分类接口。
+     *
+     * 飞牛官方没有公开 API 文档，不同固件版本接口差异较大；这个按钮让用户
+     * 在自己的 NAS 上跑一次就能看到哪些路径真实存在，便于后续精确对接。
+     */
+    suspend fun probeEndpoints(): List<String> {
+        data class Probe(val label: String, val path: String, val params: List<Pair<String, String>>)
+        val one = listOf("page" to "1", "size" to "1")
+        val probes = listOf(
+            Probe("风格分类", "/genre/list", one),
+            Probe("风格曲目", "/track/genre-detail/list", listOf("genreGUID" to "", "page" to "1", "size" to "1")),
+            Probe("文件夹视图", "/folder/list", listOf("path" to "/", "page" to "1", "size" to "1")),
+            Probe("随机曲目", "/track/random", one),
+            Probe("漫游", "/roam/list", one),
+            Probe("电台", "/radio/list", one),
+            Probe("推荐", "/recommend/list", one),
+            Probe("发现", "/discover/list", one)
+        )
+        return probes.map { p ->
+            val result = runCatching { getJson(p.path, p.params) }.fold(
+                onSuccess = { root ->
+                    val code = root.pickInt("code") ?: 0
+                    val data = root["data"]
+                    val shape = when (data) {
+                        is JsonObject -> data.keys.joinToString(",")
+                        is kotlinx.serialization.json.JsonArray -> "数组(${data.size})"
+                        else -> data?.let { it::class.java.simpleName } ?: "null"
+                    }
+                    if (code == 0) "可用 · data=$shape"
+                    else "返回 code=$code · ${root.pickStr("msg").orEmpty().take(40)}"
+                },
+                onFailure = { "不可用 · ${it.message?.take(70)}" }
+            )
+            "${p.label}  ${p.path}  →  $result"
+        }
+    }
+
     suspend fun lyricText(trackGUID: String): String? {
         val root = getJson("/lyric/list", listOf("trackGUID" to trackGUID))
         val data = root["data"]
@@ -523,6 +622,22 @@ class FnosClient(private val okHttp: OkHttpClient, private val registry: AuthReg
     fun coverUrl(coverId: String?) =
         if (coverId.isNullOrBlank()) null else "$baseUrl/static/cover?coverId=$coverId"
 
+    /**
+     * 把曲目的文件路径变成「库内目录路径」，供文件夹 Tab 逐层浏览。
+     * 飞牛返回的 path 可能是 /vol1/1000/Music/... 这类内部绝对路径，
+     * 这里剥掉卷前缀、去掉文件名，只保留目录层级。
+     */
+    private fun folderOf(path: String?): String {
+        if (path.isNullOrBlank()) return ""
+        val raw = path.replace('\\', '/')
+        val dir = raw.substringBeforeLast('/', "")
+        if (dir.isBlank()) return ""
+        // /vol1/1000/…、/volume1/… 等 NAS 卷前缀对浏览没有意义
+        val cleaned = Regex("^/(?:vol|volume)\\d+/\\d+").replace(dir, "")
+        val result = if (cleaned.startsWith("/")) cleaned else "/$cleaned"
+        return if (result == "/") "" else result
+    }
+
     fun toTrack(t: FnosTrack): Track {
         val artist = t.artists.joinToString(" / ") { it.name.ifBlank { "未知歌手" } }.ifBlank { "未知歌手" }
         // 时长可能是秒或毫秒，统一换算成毫秒
@@ -540,7 +655,8 @@ class FnosClient(private val okHttp: OkHttpClient, private val registry: AuthReg
             sampleRateHz = t.audioSpec?.sampleRate ?: 0,
             bitDepth = t.audioSpec?.bitDepth ?: 0,
             codec = t.audioSpec?.codec?.uppercase()
-                ?: t.audioSpec?.format?.uppercase() ?: ""
+                ?: t.audioSpec?.format?.uppercase() ?: "",
+            folder = folderOf(t.audioSpec?.path)
         )
     }
 }

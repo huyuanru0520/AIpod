@@ -51,6 +51,10 @@ object LibraryTabs {
     const val PLAYLISTS = "playlists"
     const val ALBUMS = "albums"
     const val FOLDERS = "folders"
+    /** 风格 / 流派：飞牛原生 /genre/list，WebDAV 无此元数据。 */
+    const val GENRES = "genres"
+    /** 漫游：全曲库随机流，两种音源都支持。 */
+    const val ROAM = "roam"
     const val SEARCH = "search"
 
     val all: List<Pair<String, String>> = listOf(
@@ -59,9 +63,25 @@ object LibraryTabs {
         PLAYLISTS to "歌单",
         ALBUMS to "专辑",
         FOLDERS to "文件夹",
+        GENRES to "风格",
+        ROAM to "漫游",
         SEARCH to "搜索"
     )
-    val default: Set<String> get() = all.map { it.first }.toSet()
+
+    val keys: List<String> get() = all.map { it.first }
+
+    /** 默认顺序 = all 的声明顺序。用户可在设置里上下移动调整。 */
+    val default: List<String> get() = keys
+
+    fun labelOf(key: String): String = all.firstOrNull { it.first == key }?.second ?: key
+
+    /** 保留传入顺序、去重、丢弃不认识的 key。 */
+    fun normalize(ordered: Iterable<String>): List<String> {
+        val valid = keys.toSet()
+        val seen = LinkedHashSet<String>()
+        ordered.forEach { k -> if (k in valid) seen.add(k) }
+        return seen.toList()
+    }
 }
 
 /** WebDAV 扫描节奏：相邻请求最小间隔 + 并行数，两者共同决定速度与风控强度。 */
@@ -123,7 +143,7 @@ class MusicBoxApp : Application() {
     /** 并行 PROPFIND 数：真正的并发，默认均衡档 6 路，越大扫描越快但越易触发限流。 */
     val scanConcurrency = MutableStateFlow(ScanPace.BALANCED_CONCURRENCY)
     /** 主界面显示哪些栏目（歌曲/歌手/歌单/专辑/文件夹/搜索），设置里可勾选。 */
-    val visibleTabs = MutableStateFlow(LibraryTabs.default)
+    val visibleTabs = MutableStateFlow<List<String>>(LibraryTabs.default)
     /** 播放音质：默认原采样率直通。 */
     val audioQuality = MutableStateFlow(AudioQuality.ORIGINAL)
     /**
@@ -314,11 +334,15 @@ class MusicBoxApp : Application() {
     }
 
     /** 勾选主界面要显示的栏目；至少保留一个，避免整页空白。 */
-    suspend fun setVisibleTabs(tabs: Set<String>) {
-        val safe = tabs.filter { LibraryTabs.all.any { t -> t.first == it } }.toSet()
-        visibleTabs.value = if (safe.isEmpty()) setOf(LibraryTabs.SONGS) else safe
-        CrashLogger.info("Settings", "主界面栏目=${visibleTabs.value.joinToString(",")}")
-        dataStore.edit { it[T_TABS] = visibleTabs.value.joinToString(",") }
+    /** 保存栏目顺序（逗号串本身就是有序的），WebDAV 与飞牛通用。 */
+    suspend fun setVisibleTabs(tabs: List<String>) {
+        val safe = LibraryTabs.normalize(tabs)
+        visibleTabs.value = if (safe.isEmpty()) listOf(LibraryTabs.SONGS) else safe
+        CrashLogger.info("Settings", "主界面栏目顺序=${visibleTabs.value.joinToString(" > ")}")
+        dataStore.edit {
+            it[T_TABS] = visibleTabs.value.joinToString(",")
+            it[T_TABS_ORDERED] = true
+        }
     }
 
     suspend fun setAudioQuality(q: AudioQuality) {
@@ -417,8 +441,18 @@ class MusicBoxApp : Application() {
         p[S_PACE]?.let { scanPaceMs.value = it.coerceIn(0L, 2000L) }
         p[S_CONCURRENCY]?.let { scanConcurrency.value = it.toInt().coerceIn(1, 48) }
         p[T_TABS]?.let { raw ->
-            val set = raw.split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
-            if (set.isNotEmpty()) visibleTabs.value = set
+            val parts = raw.split(',').map { it.trim() }.filter { it.isNotBlank() }
+            val ordered = if (p[T_TABS_ORDERED] == true) {
+                // 新版：逗号串本身就是用户排好的顺序
+                LibraryTabs.normalize(parts)
+            } else {
+                // 老版存的是 Set（无顺序语义）：按默认顺序还原勾选状态，
+                // 并把新增的「风格 / 漫游」追加到末尾直接显示。
+                val saved = parts.toSet()
+                val base = LibraryTabs.keys.filter { it in saved }
+                (base + listOf(LibraryTabs.GENRES, LibraryTabs.ROAM).filter { it !in base }).distinct()
+            }
+            if (ordered.isNotEmpty()) visibleTabs.value = ordered
         }
         p[Q_QUALITY]?.let { runCatching { audioQuality.value = AudioQuality.valueOf(it) } }
         // 调试模式：从持久化读取并同步给 CrashLogger（默认关闭，避免常驻日志 I/O）
@@ -631,8 +665,8 @@ class MusicBoxApp : Application() {
         o.optString("source_mode").takeIf { it.isNotBlank() }
             ?.let { runCatching { setSource(SourceMode.valueOf(it)) } }
         o.optString("visible_tabs").takeIf { it.isNotBlank() }?.let { raw ->
-            val set = raw.split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
-            if (set.isNotEmpty()) setVisibleTabs(set)
+            val ordered = LibraryTabs.normalize(raw.split(',').map { it.trim() })
+            if (ordered.isNotEmpty()) setVisibleTabs(ordered)
         }
         o.optString("audio_quality").takeIf { it.isNotBlank() }
             ?.let { runCatching { setAudioQuality(AudioQuality.valueOf(it)) } }
@@ -707,5 +741,7 @@ private val S_PACE = longPreferencesKey("scan_pace_ms")
 private val S_CONCURRENCY = longPreferencesKey("scan_concurrency")
 private val S_SOURCE = stringPreferencesKey("source_mode")
 private val T_TABS = stringPreferencesKey("visible_tabs")
+/** 标记 visible_tabs 是否已按「有序列表」格式保存（老版本是无序 Set）。 */
+private val T_TABS_ORDERED = booleanPreferencesKey("visible_tabs_ordered_v2")
 private val Q_QUALITY = stringPreferencesKey("audio_quality")
 private val D_DEBUG = booleanPreferencesKey("debug_mode")

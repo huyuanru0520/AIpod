@@ -10,7 +10,7 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.24-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material3-4285F4?logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![Media3](https://img.shields.io/badge/Media3-1.5.1-FF6F00)](https://developer.android.com/media/media3)
-[![Version](https://img.shields.io/badge/version-1.1.2-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 </div>
@@ -28,7 +28,8 @@ Matrix Music 不建索引库、不依赖服务端插件，直接用 WebDAV 协�
 | 模块 | 说明 |
 | --- | --- |
 | **音源** | WebDAV（Basic / 匿名）、飞牛 FnOS 音乐（账号登录、多线路回退）；同一时刻启用一种，设置里切换 |
-| **媒体库** | 歌曲 / 歌手 / 歌单 / 专辑 / 文件夹 / 搜索六个栏目，可自由勾选显示 |
+| **媒体库** | 歌曲 / 歌手 / 歌单 / 专辑 / 文件夹 / 风格 / 漫游 / 搜索八个栏目，可勾选并**拖动顺序** |
+| **飞牛分类** | 风格直接读服务端 `/genre/list`；文件夹用 `audioSpec.path` 本地建树；漫游为全库随机流 |
 | **扫描** | 四档节奏（温和 250ms·3 路 → 极速 0ms·32 路），STRM 场景可全速；结果落盘缓存，冷启动秒开 |
 | **线路** | 主备地址自动切换；切换时直接改写索引里的地址，不重新扫描，正在播的歌也会自动换线重试 |
 | **播放** | Media3 ExoPlayer，MediaSession 接入系统媒体控制与通知栏；支持 FLAC / ALAC / WAV / AAC / MP3 |
@@ -104,7 +105,8 @@ app/src/main/java/com/musicbox/nas/
 │   ├── Models.kt              Track 等领域模型
 │   ├── LyricsRepo.kt          歌词加载：内嵌 → 同名 .lrc → 缓存
 │   ├── webdav/WebDavClient.kt PROPFIND 扫描、Range 读取、STRM 解析
-│   ├── fnos/FnosClient.kt     飞牛音乐接口、登录与线路回退
+│   ├── fnos/FnosClient.kt     飞牛音乐接口、登录、风格分类与接口自检
+│   ├── fnos/FnosCatalog.kt    飞牛全量曲目本地索引（文件夹树 / 随机漫游）
 │   └── m3u/M3uParser.kt       M3U / M3U8 歌单解析
 ├── player/
 │   ├── PlaybackService.kt     MediaSessionService

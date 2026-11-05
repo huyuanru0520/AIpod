@@ -81,6 +81,7 @@ import com.musicbox.nas.MusicBoxApp
 import com.musicbox.nas.LibraryTabs
 import com.musicbox.nas.SourceMode
 import com.musicbox.nas.data.Track
+import com.musicbox.nas.data.fnos.FnosCatalog
 import com.musicbox.nas.data.webdav.DavAlbum
 import com.musicbox.nas.data.webdav.DavLibrary
 import com.musicbox.nas.player.PlayerController
@@ -138,6 +139,13 @@ private class SourceBrowserData(
     val loadPlaylistTracks: suspend (SourceEntry) -> List<Track>,
     val loadFolders: suspend (parentPath: String?) -> Pair<List<String>, List<Track>> = { _ -> emptyList<String>() to emptyList() },
     val supportsFolders: Boolean = true,
+    /** 风格 / 流派：飞牛走 /genre/list，WebDAV 无此元数据。 */
+    val loadGenres: suspend () -> List<SourceEntry> = { emptyList() },
+    val loadGenreTracks: suspend (SourceEntry) -> List<Track> = { emptyList() },
+    val supportsGenres: Boolean = false,
+    /** 漫游：全库随机流，两种音源都支持。 */
+    val loadRoam: suspend () -> List<Track> = { emptyList() },
+    val supportsRoam: Boolean = true,
     val search: suspend (String) -> List<Track>,
     val status: String = "",
     val playlistHint: String = ""
@@ -254,6 +262,9 @@ private fun buildDavData(lib: DavLibrary): SourceBrowserData {
         loadFolders = { parent ->
             folderCache.getOrPut(parent) { foldersOf(lib.tracks, parent, rootPrefix) }
         },
+        supportsFolders = true,
+        supportsGenres = false,
+        loadRoam = { lib.tracks.shuffled().take(60) },
         search = { q ->
             if (q.isBlank()) emptyList()
             else lib.tracks.filter {
@@ -268,6 +279,9 @@ private fun buildDavData(lib: DavLibrary): SourceBrowserData {
 
 private fun buildFnosData(): SourceBrowserData {
     val client = MusicBoxApp.instance.fnosClient
+    // 文件夹树由本地全量索引构建：按父路径缓存，避免反复 filter 上万首歌
+    val fnosFolderCache = HashMap<String?, Pair<List<String>, List<Track>>>()
+    fun fnosFolderRoot(all: List<Track>) = folderRootPrefix(all)
     fun cover(id: String?) = client.coverUrl(id)
     return SourceBrowserData(
         sourceLabel = "飞牛音乐",
@@ -349,7 +363,29 @@ private fun buildFnosData(): SourceBrowserData {
             val (list, _) = client.searchTrack(q, 1, 100)
             list.map { client.toTrack(it) }
         },
-        supportsFolders = false,
+        supportsFolders = true,
+        loadFolders = { parent ->
+            val all = FnosCatalog.tracks()
+            fnosFolderCache.getOrPut(parent) { foldersOf(all, parent, fnosFolderRoot(all)) }
+        },
+        supportsGenres = true,
+        loadGenres = {
+            val (list, _) = client.genreList(1, 300)
+            list.map { g ->
+                SourceEntry(
+                    id = "fnos-genre-${g.guid}",
+                    name = g.name.ifBlank { "未知风格" },
+                    subtitle = "${g.trackCount ?: "?"} 首 · 服务端风格分类",
+                    coverUrl = null,
+                    key = g.guid
+                )
+            }
+        },
+        loadGenreTracks = { e ->
+            val (list, _) = client.genreTracks(e.key, e.name, 1, 300)
+            list.map { client.toTrack(it) }
+        },
+        loadRoam = { FnosCatalog.roam(60) },
         playlistHint = "自动读取飞牛音乐服务端的歌单，点击即可查看歌曲"
     )
 }
@@ -361,6 +397,7 @@ private sealed class BrowserDetail {
     data class Artist(val entry: SourceEntry) : BrowserDetail()
     data class ArtistAlbum(val entry: SourceEntry) : BrowserDetail()
     data class Playlist(val entry: SourceEntry) : BrowserDetail()
+    data class Genre(val entry: SourceEntry) : BrowserDetail()
 }
 
 /**
@@ -400,14 +437,16 @@ private fun SourceBrowser(
     statusLine: String? = null,
     scanning: Boolean = false
 ) {
-    // 栏目可在设置里勾选；顺序固定：歌曲 / 歌手 / 歌单 / 专辑 / 文件夹 / 搜索
-    // 飞牛是服务端曲库，没有「文件夹」概念，仅 WebDAV 显示该 Tab
+    // 栏目顺序完全由「设置 → 主界面栏目」决定（有序列表），
+    // 再按当前音源的能力过滤掉用不上的栏目。
     val app = MusicBoxApp.instance
     val visibleTabs by app.visibleTabs.collectAsState()
     val tabs = buildList {
-        LibraryTabs.all.forEach { (key, label) ->
+        visibleTabs.forEach { key ->
             if (key == LibraryTabs.FOLDERS && !data.supportsFolders) return@forEach
-            if (visibleTabs.contains(key)) add(key to label)
+            if (key == LibraryTabs.GENRES && !data.supportsGenres) return@forEach
+            if (key == LibraryTabs.ROAM && !data.supportsRoam) return@forEach
+            add(key to LibraryTabs.labelOf(key))
         }
     }.ifEmpty { listOf(LibraryTabs.SONGS to "歌曲") }
 
@@ -594,6 +633,14 @@ private fun SourceBrowser(
                                     // 只有「当前停留页」才允许文件夹层级接管返回手势，
                                     // 避免 Pager 预组合的相邻页抢走返回键。
                                     "folders" -> FoldersTab(data, active = pagerState.currentPage == page)
+                                    "genres" -> EntriesTab(
+                                        data.loadGenres,
+                                        "服务端没有风格分类",
+                                        hint = "读取飞牛音乐的风格 / 流派分类，点击某个风格查看曲目"
+                                    ) {
+                                        detailStack = listOf(BrowserDetail.Genre(it))
+                                    }
+                                    "roam" -> RoamTab(data)
                                     else -> SearchTab(data)
                                 }
                             }
@@ -1049,7 +1096,51 @@ private fun fmtTime(sec: Int): String {
     return "$m:${s.toString().padStart(2, '0')}"
 }
 
-/** 歌曲 Tab：左侧封面歌曲行，飞牛的分页由「加载更多」承接。 */@Composable
+/** 随机漫游：全库随机曲目，支持换一批与一键播放。 */
+@Composable
+private fun RoamTab(data: SourceBrowserData) {
+    var tracks by remember(data) { mutableStateOf<List<Track>>(emptyList()) }
+    var loading by remember(data) { mutableStateOf(true) }
+    var error by remember(data) { mutableStateOf<String?>(null) }
+    var refresh by remember(data) { mutableStateOf(0) }
+
+    LaunchedEffect(data, refresh) {
+        loading = true; error = null
+        runCatching { data.loadRoam() }
+            .onSuccess { tracks = it }
+            .onFailure { error = CrashLogger.describe("漫游加载失败", it) }
+        loading = false
+    }
+
+    LazyColumn(Modifier.fillMaxSize()) {
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "随机漫游" + if (tracks.isNotEmpty()) " · ${tracks.size} 首" else "",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { refresh++ }) { Text("换一批") }
+                if (tracks.isNotEmpty()) {
+                    Button(onClick = { PlayerController.playTracks(tracks, 0) }) { Text("播放全部") }
+                }
+            }
+        }
+        if (loading) item { LoadingRow() }
+        if (error != null) item { InlineError(error!!) }
+        itemsIndexed(tracks, key = { i, t -> "${t.id}#$i" }) { i, t ->
+            TrackRow(t, onClick = { PlayerController.playTracks(tracks, i) })
+            HorizontalDivider()
+        }
+        if (tracks.isEmpty() && !loading && error == null) item { EmptyHint("曲库为空，无法漫游") }
+    }
+}
+
+/** 歌曲 Tab：左侧封面歌曲行，飞牛的分页由「加载更多」承接。 */
+@Composable
 private fun SongsTab(data: SourceBrowserData) {
     var tracks by remember(data) { mutableStateOf<List<Track>>(emptyList()) }
     var page by remember(data) { mutableStateOf(1) }
@@ -1298,6 +1389,8 @@ private fun DetailView(
             TracksDetailView(data.loadAlbumTracks, detail.entry, onPop, showCover = false)
         is BrowserDetail.Playlist ->
             TracksDetailView(data.loadPlaylistTracks, detail.entry, onPop, showCover = true)
+        is BrowserDetail.Genre ->
+            TracksDetailView(data.loadGenreTracks, detail.entry, onPop, showCover = false)
     }
 }
 
