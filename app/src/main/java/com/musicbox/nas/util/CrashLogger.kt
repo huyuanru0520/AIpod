@@ -58,7 +58,8 @@ object CrashLogger {
     fun setEnabled(b: Boolean) {
         enabled = b
         if (b) {
-            append("调试模式已开启")
+            append("调试模式已开启 · Matrix Music v${com.musicbox.nas.BuildConfig.VERSION_NAME}" +
+                " (${com.musicbox.nas.BuildConfig.VERSION_CODE})")
             flushNow()
         }
     }

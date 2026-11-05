@@ -4,6 +4,16 @@
 
 <!-- 推到自己的仓库后，把文末 compare 链接里的 your-name 替换成实际 GitHub 用户名；或直接删掉链接定义，改为纯文本标题。 -->
 
+## [1.2.5] - 2025-11-06
+
+### Fixed
+- 播放页状态栏仍然不显示：根因是「先 hide 整屏、再 show 状态栏回来」这条路径上，150/500/1000ms 的三次补 hide 与 insets 自愈回调都会把它重新藏掉。现在「只显状态栏」模式**完全退出沉浸流程**：不 hide、不补 hide、不做自愈，没有任何代码能再藏它。
+- 该模式同时清掉 `FLAG_LAYOUT_NO_LIMITS`。该标志让窗口无视系统栏，部分 ROM 会按「状态栏被覆盖」处理，导致状态栏时有时无；播放页改用普通 edge-to-edge，避让交给 `statusBarsPadding`。
+- 底部播放控制栏加 `navigationBarsPadding()`，导航栏恢复显示后不再压住按钮。
+
+### Changed
+- 日志首行改为 `调试模式已开启 · Matrix Music v1.2.5 (54)`，一眼可确认设备上装的到底是哪一版。
+
 ## [1.2.4] - 2025-11-05
 
 ### Fixed
@@ -146,6 +156,7 @@
 
 初始版本：WebDAV / 飞牛 FnOS 音源接入、全库扫描与缓存、Media3 播放与通知栏控制、歌词与封面解析、CoverFlow 浏览。
 
+[1.2.5]: https://github.com/your-name/MatrixMusic/compare/v1.2.4...v1.2.5
 [1.2.4]: https://github.com/your-name/MatrixMusic/compare/v1.2.3...v1.2.4
 [1.2.3]: https://github.com/your-name/MatrixMusic/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/your-name/MatrixMusic/compare/v1.2.1...v1.2.2

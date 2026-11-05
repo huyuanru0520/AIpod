@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -379,6 +380,8 @@ private fun BottomControls(
     Column(
         Modifier
             .fillMaxWidth()
+            // 播放页现在保留系统栏，导航栏会占掉底部一条：按钮必须避开它
+            .navigationBarsPadding()
             .padding(horizontal = 20.dp, vertical = 10.dp)
     ) {
         if (track.isHiRes || track.qualityLabel.isNotBlank()) {
