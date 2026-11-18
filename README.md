@@ -71,6 +71,12 @@ cp local.properties.example local.properties
 
 产物：`app/build/outputs/apk/release/app-release.apk`
 
+一键打正式交付包（编译 → 校验版本 → 源码归档 → **自动清掉旧版本，交付目录只保留最新一版**）：
+
+```bash
+./scripts/release.sh       # 交付到上级目录；可用 OUT_DIR 指定其它路径
+```
+
 ### 正式签名
 
 仓库不含任何密钥。要打可上架的包，在项目根目录建 `keystore.properties`（已加入 `.gitignore`）：
