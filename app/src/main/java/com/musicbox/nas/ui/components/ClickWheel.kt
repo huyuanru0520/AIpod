@@ -82,9 +82,7 @@ fun ClickWheel(
     onConfirm: () -> Unit,
     /** 中心键长按：播放页用它切换歌词界面；不传则无行为。 */
     onCenterLongPress: () -> Unit = {},
-    modifier: Modifier = Modifier,
-    /** 主界面列表滚动启用 iPod 式加速度：慢转细腻、快转加速；搜索字母盘等场景应关闭。 */
-    accelerated: Boolean = false
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -142,14 +140,14 @@ fun ClickWheel(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
-                    // 转动：累计角度，每 12° 一格，一次细震 + 一次回调
+                    // 转动：累计角度，每 18° 一格，固定每次 ±1 项（纯逐行）。
+                    // 曾尝试 iPod 式加速度（快转跨多行），但触摸事件采样间隔普遍 <24ms，
+                    // 慢转也被误判为快转、档位长期顶在上限，结果「一滑就跳三行、越过目标」。
+                    // 现在统一逐行，与设置页手感一致；想快速移动就连续多转几格。
                     var lastAngle = 0f
                     var accum = 0f
                     var lastTickAt = 0L
                     var onRing = false
-                    // 加速度状态：连续快速转动时逐步提速，停手后回落到 1 格/项。
-                    var velSteps = 1
-                    var lastDragAt = 0L
                     detectDragGestures(
                         onDragStart = { p ->
                             val c = Offset(size.width / 2f, size.height / 2f)
@@ -158,8 +156,6 @@ fun ClickWheel(
                             onRing = r > radius * 0.38f && r <= radius * 1.04f
                             lastAngle = angleOf(p, c)
                             accum = 0f
-                            velSteps = 1
-                            lastDragAt = 0L
                         },
                         onDragEnd = { onRing = false },
                         onDragCancel = { onRing = false }
@@ -174,24 +170,7 @@ fun ClickWheel(
                         lastAngle = a
                         accum += delta
 
-                        // 速度档位按「相邻手势事件的时间间隔」计算，一次事件只算一次。
-                        // 旧实现把升档放在下面的 while 里逐格累加：单次快速滑动时 while 循环
-                        // 在同一毫秒内跑很多格，dt 几乎为 0，档位瞬间飙到上限（6），
-                        // 于是轻轻一甩就跨一大串、直接冲到列表底部。
-                        // 新实现：只有连续多个「快速事件」才逐级升档，停手/慢转立即回落到 1，
-                        // 且上限降到 3，手感更接近 iPod 的渐进加速。
                         val now = System.currentTimeMillis()
-                        val steps = if (accelerated) {
-                            val gap = if (lastDragAt == 0L) Long.MAX_VALUE else now - lastDragAt
-                            lastDragAt = now
-                            velSteps = when {
-                                gap <= 24L -> (velSteps + 1).coerceAtMost(MAX_VELOCITY_STEPS)
-                                gap <= 70L -> velSteps
-                                else -> 1
-                            }
-                            velSteps
-                        } else 1
-
                         while (abs(accum) >= STEP_DEGREES) {
                             val forward = accum > 0
                             accum -= if (forward) STEP_DEGREES else -STEP_DEGREES
@@ -200,7 +179,7 @@ fun ClickWheel(
                                 lastTickAt = now
                                 Haptics.tick(context, view)
                             }
-                            onRotateRef.value(if (forward) steps else -steps)
+                            onRotateRef.value(if (forward) 1 else -1)
                         }
                     }
                 }
@@ -378,8 +357,6 @@ private fun hitZone(p: Offset, size: IntSize): WheelZone {
 /** 18° 一格：20 格一圈，慢转更稳、不易一甩跨过一堆选项。 */
 private const val STEP_DEGREES = 18f
 private const val MIN_TICK_INTERVAL_MS = 60L
-/** 加速度上限：连续快速转动时单格最多跨过的项数（iPod 式渐进加速，不宜过大以免冲底）。 */
-private const val MAX_VELOCITY_STEPS = 3
 private const val LONG_PRESS_MS = 420L
 private const val REPEAT_MS = 240L
 

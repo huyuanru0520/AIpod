@@ -467,9 +467,7 @@ internal fun WheelHome(
                     onForward = { PlayerController.seekTo(PlayerController.currentPositionMs() + 5_000L) },
                     onMenu = { onWheelMenu() },
                     onMenuHome = { home() },
-                    onConfirm = { onWheelConfirm() },
-                    // 列表滚动启用 iPod 式加速度；搜索字母盘需要逐字精确选择，关闭加速度。
-                    accelerated = !(node is WheelNode.Search && searchPhase == 0)
+                    onConfirm = { onWheelConfirm() }
                 )
             }
         }
