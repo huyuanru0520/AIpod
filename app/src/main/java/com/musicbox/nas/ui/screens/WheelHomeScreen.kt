@@ -437,13 +437,14 @@ internal fun WheelHome(
                 }
             }
 
-            // 转轮：竖屏保留 iPod 转轮作为唯一交互
+            // 转轮：竖屏保留 iPod 转轮作为唯一交互。
+            // 上移到「列表底部」与「屏幕底部」之间：底部留出约一项的空白，列表可视区相应少一项。
             val isPlaying by PlayerController.isPlaying.collectAsState()
             Box(
                 Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(bottom = 10.dp),
+                    .padding(bottom = 64.dp),
                 contentAlignment = Alignment.Center
             ) {
                 ClickWheel(
