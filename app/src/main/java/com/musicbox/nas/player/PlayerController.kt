@@ -198,6 +198,8 @@ object PlayerController {
             })
         }.onFailure { CrashLogger.error("PlayerController.listener", it) }
 
+        // 转轮调出来的音量要在播放器重建后仍然生效
+        runCatching { p.volume = MusicBoxApp.instance.volume.value.coerceIn(0f, 1f) }
         _connected.value = true
         startPolling()
         CrashLogger.info("PlayerController", "已绑定 ExoPlayer")
@@ -348,6 +350,12 @@ object PlayerController {
         }.onFailure { logCtrl(if (forward) "next" else "previous", it) }
     }
     fun seekTo(posMs: Long) { runCatching { player?.seekTo(posMs) }.onFailure { logCtrl("seekTo", it) } }
+    /** 转轮调整音量：ExoPlayer 的 0f~1f 线性增益。 */
+    fun setVolume(v: Float) {
+        runCatching { player?.volume = v.coerceIn(0f, 1f) }.onFailure { logCtrl("setVolume", it) }
+    }
+    /** 转轮调整进度时读取当前位置（不订阅 StateFlow，避免整页每 500ms 重组）。 */
+    fun currentPositionMs(): Long = runCatching { player?.currentPosition ?: 0L }.getOrDefault(0L)
     fun setRepeat(mode: Int) { runCatching { player?.repeatMode = mode }.onFailure { logCtrl("setRepeat", it) } }
 
     fun cycleRepeat(): Int {

@@ -34,6 +34,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.musicbox.nas.util.Haptics
@@ -44,44 +45,55 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.sin
 
+/** 转轮当前控制的量：播放时调音量，暂停时调进度。 */
+enum class WheelMode { VOLUME, PROGRESS }
+
 /**
- * iPod 式点击转轮（Click Wheel）。
+ * 深色液态玻璃 iPod 转轮。
  *
- * 交互：
- * - 外圈拖动旋转，每转过 [STEP_DEGREES] 度算「一格」，回调 [onNext] / [onPrevious] 并轻震一下；
- * - 中心圆：播放 / 暂停；
- * - 环带上 / 下：上一首 / 下一首；
- * - 环带左：MENU（返回）；环带右：确认（打开播放队列）。
+ * 按键位置（对照经典 iPod）：
+ * - 上：MENU（返回）
+ * - 左：上一首 / 倒退（由页面按当前模式决定）
+ * - 右：下一首 / 快进
+ * - 下：开始 / 暂停（同时切换转轮的音量 / 进度模式）
+ * - 中心：确认
  *
- * 视觉刻意做成经典的白色转轮 + 灰色符号，与深色封面背景形成对比；
- * 转轮本身不跟着转，只有拖动时环上的一枚小圆点跟随手指，提示「正在滚」。
+ * 转动：外圈每转过 [STEP_DEGREES] 记一格，环上的刻度一格一格走，同时轻震一下。
  */
 @Composable
 fun ClickWheel(
     diameter: Dp,
+    mode: WheelMode,
     isPlaying: Boolean,
+    onRotate: (Int) -> Unit,
     onPlayPause: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onMenu: () -> Unit,
-    onSelect: () -> Unit,
+    onConfirm: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    // 拖动时手指在环上的角度，用于画跟随的小圆点；松手置空
     var dragAngle by remember { mutableStateOf<Float?>(null) }
+    var tickPhase by remember { mutableStateOf(0) }
     var centerDown by remember { mutableStateOf(false) }
+    var bottomDown by remember { mutableStateOf(false) }
     val centerScale by animateFloatAsState(
-        targetValue = if (centerDown) 0.94f else 1f,
+        targetValue = if (centerDown) 0.93f else 1f,
         animationSpec = spring(stiffness = 900f, dampingRatio = 0.7f),
         label = "wheelCenter"
+    )
+    val bottomScale by animateFloatAsState(
+        targetValue = if (bottomDown) 0.90f else 1f,
+        animationSpec = spring(stiffness = 900f, dampingRatio = 0.7f),
+        label = "wheelBottom"
     )
 
     BoxWithConstraints(
         modifier = modifier
             .size(diameter)
             .pointerInput(Unit) {
-                // —— 转动切歌 ——
+                // —— 转动：累计角度，每过一格触发一次 ——
                 var lastAngle = 0f
                 var accum = 0f
                 var lastTickAt = 0L
@@ -89,9 +101,9 @@ fun ClickWheel(
                 detectDragGestures(
                     onDragStart = { p ->
                         val c = Offset(size.width / 2f, size.height / 2f)
-                        val r = hypot(p.x - c.x, p.y - c.y)
                         val radius = minOf(size.width, size.height) / 2f
-                        onRing = r > radius * 0.36f && r <= radius * 1.02f
+                        val r = hypot(p.x - c.x, p.y - c.y)
+                        onRing = r > radius * 0.38f && r <= radius * 1.04f
                         lastAngle = angleOf(p, c)
                         accum = 0f
                         if (onRing) dragAngle = lastAngle
@@ -104,23 +116,21 @@ fun ClickWheel(
                     val c = Offset(size.width / 2f, size.height / 2f)
                     val a = angleOf(change.position, c)
                     var delta = a - lastAngle
-                    // 处理 ±180° 跨界
                     if (delta > 180f) delta -= 360f
                     if (delta < -180f) delta += 360f
                     lastAngle = a
                     dragAngle = a
                     accum += delta
 
-                    // 一格一格的「咔哒」：角度累积够一格就触发，但两次触发之间留最短间隔，
-                    // 免得手指甩一大圈时连续切掉半张专辑。
                     while (abs(accum) >= STEP_DEGREES) {
                         val forward = accum > 0
                         accum -= if (forward) STEP_DEGREES else -STEP_DEGREES
                         val now = System.currentTimeMillis()
                         if (now - lastTickAt < MIN_TICK_INTERVAL_MS) continue
                         lastTickAt = now
+                        tickPhase += if (forward) 1 else -1
                         Haptics.tick(context)
-                        if (forward) onNext() else onPrevious()
+                        onRotate(if (forward) 1 else -1)
                     }
                 }
             }
@@ -128,175 +138,174 @@ fun ClickWheel(
                 // —— 五个点击区 ——
                 detectTapGestures(
                     onPress = { p ->
-                        val c = Offset(size.width / 2f, size.height / 2f)
-                        if (hypot(p.x - c.x, p.y - c.y) <= minOf(size.width, size.height) * 0.17f) {
-                            centerDown = true
-                            tryAwaitRelease()
-                            centerDown = false
+                        when (hitZone(p, size)) {
+                            WheelZone.CENTER -> {
+                                centerDown = true
+                                tryAwaitRelease()
+                                centerDown = false
+                            }
+                            WheelZone.BOTTOM -> {
+                                bottomDown = true
+                                tryAwaitRelease()
+                                bottomDown = false
+                            }
+                            else -> Unit
                         }
                     },
                     onTap = { p ->
-                        val c = Offset(size.width / 2f, size.height / 2f)
-                        val dx = p.x - c.x
-                        val dy = p.y - c.y
-                        val r = hypot(dx, dy)
-                        val radius = minOf(size.width, size.height) / 2f
-                        if (r > radius * 1.02f) return@detectTapGestures
-
-                        if (r <= radius * 0.34f) {
-                            Haptics.click(context)
-                            onPlayPause()
-                            return@detectTapGestures
-                        }
-                        // 屏幕上 y 轴向下：atan2 的 90° 指向正下方
-                        val deg = Math.toDegrees(atan2(dy, dx).toDouble()).toFloat()
-                        Haptics.click(context)
-                        when {
-                            deg in -135f..-45f -> onPrevious()
-                            deg in 45f..135f -> onNext()
-                            deg < -135f || deg > 135f -> onMenu()
-                            else -> onSelect()
+                        when (hitZone(p, size)) {
+                            WheelZone.TOP -> onMenu()
+                            WheelZone.LEFT -> onPrevious()
+                            WheelZone.RIGHT -> onNext()
+                            WheelZone.BOTTOM -> onPlayPause()
+                            WheelZone.CENTER -> onConfirm()
+                            WheelZone.NONE -> Unit
                         }
                     }
                 )
             }
     ) {
         val d = maxWidth
-        Canvas(Modifier.fillMaxSize()) {
-            val radius = minOf(size.width, size.height) / 2f
-            val c = center
-            val rim = 1.dp.toPx()
-
-            // 落在封面背景上的投影，让转轮「浮」起来
-            drawCircle(
-                color = Color.Black.copy(alpha = 0.34f),
-                radius = radius * 0.985f,
-                center = Offset(c.x, c.y + 7.dp.toPx())
-            )
-            // 轮体：左上方受光，右下方渐暗
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(Color(0xFFFFFFFF), Color(0xFFF4F4F5), Color(0xFFD9D9DC)),
-                    center = Offset(c.x - radius * 0.36f, c.y - radius * 0.42f),
-                    radius = radius * 1.75f
-                ),
-                radius = radius,
-                center = c
-            )
-            // 外沿：上缘一道白高光 + 整体一圈极细的灰边
-            drawCircle(
-                color = Color.White.copy(alpha = 0.9f),
-                radius = radius - rim / 2f,
-                center = c,
-                style = Stroke(rim)
-            )
-            drawCircle(
-                color = Color.Black.copy(alpha = 0.10f),
-                radius = radius - rim,
-                center = c,
-                style = Stroke(rim)
-            )
-
-            // 中心按钮：略微内凹的一圈 + 自己的受光面
-            drawCircle(
-                color = Color.Black.copy(alpha = 0.12f),
-                radius = radius * 0.355f,
-                center = c,
-                style = Stroke(rim)
-            )
-            drawCircle(
-                color = Color.White.copy(alpha = 0.85f),
-                radius = radius * 0.355f + rim,
-                center = c,
-                style = Stroke(rim)
-            )
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(Color(0xFFFDFDFE), Color(0xFFEFEFF0), Color(0xFFDCDCDE)),
-                    center = Offset(c.x - radius * 0.12f, c.y - radius * 0.16f),
-                    radius = radius * 0.6f
-                ),
-                radius = radius * 0.335f,
-                center = c
-            )
-
-            // 拖动跟随点：让「在转」这件事有即时反馈
-            dragAngle?.let { a ->
-                val rad = a * PI.toFloat() / 180f
-                val p = Offset(
-                    c.x + cos(rad) * radius * 0.72f,
-                    c.y + sin(rad) * radius * 0.72f
-                )
-                drawCircle(Color.Black.copy(alpha = 0.16f), radius * 0.075f, p)
-                drawCircle(Color.White.copy(alpha = 0.95f), radius * 0.055f, p)
-            }
-        }
-
-        // 环带上的四个符号：位置在环带中线上（距边缘约 0.145×直径）
-        val symbolInset = d * 0.135f
-        Icon(
-            Icons.Default.SkipPrevious,
-            contentDescription = "上一首",
-            tint = WheelInk,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = symbolInset)
-                .size(d * 0.085f)
-        )
-        Icon(
-            Icons.Default.SkipNext,
-            contentDescription = "下一首",
-            tint = WheelInk,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = symbolInset)
-                .size(d * 0.085f)
-        )
-        Text(
-            "MENU",
-            color = WheelInk,
-            fontSize = (d.value * 0.042f).sp,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 1.2.sp,
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = symbolInset * 0.82f)
-        )
-        Text(
-            "✓",
-            color = WheelInk,
-            fontSize = (d.value * 0.062f).sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = symbolInset * 0.92f)
-        )
-
-        // 中心：播放 / 暂停
-        Box(
-            Modifier
-                .align(Alignment.Center)
-                .size(d * 0.40f)
-                .scale(centerScale),
-            contentAlignment = Alignment.Center
+        // 深色液态玻璃轮体：GlassSurface 提供投影、边缘亮线和内侧竖向高光
+        GlassSurface(
+            modifier = Modifier.fillMaxSize(),
+            shape = CircleShape,
+            tint = Color(0xFF141417),
+            tintAlpha = 0.74f,
+            elevation = 20.dp,
+            forceDark = true
         ) {
-            Icon(
-                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (isPlaying) "暂停" else "播放",
-                tint = WheelInk,
-                modifier = Modifier.size(d * 0.13f)
+            Canvas(Modifier.fillMaxSize()) {
+                val radius = minOf(size.width, size.height) / 2f
+                val c = center
+
+                // 外圈刻度：36 根短刻线，当前一格高亮，转起来能「看见」每一下
+                val ticks = 36
+                val current = ((tickPhase % ticks) + ticks) % ticks
+                // 高亮刻度随模式换色：红=音量，青=进度，一眼知道现在转轮在调什么
+                val activeTick = if (mode == WheelMode.VOLUME) Color(0xFFFA2D48) else Color(0xFF62D8FF)
+                for (i in 0 until ticks) {
+                    val a = (-90f + i * (360f / ticks)) * PI.toFloat() / 180f
+                    val active = i == current
+                    val start = radius * if (active) 0.845f else 0.875f
+                    val end = radius * 0.955f
+                    drawLine(
+                        color = if (active) activeTick else Color.White.copy(alpha = 0.24f),
+                        start = Offset(c.x + cos(a) * start, c.y + sin(a) * start),
+                        end = Offset(c.x + cos(a) * end, c.y + sin(a) * end),
+                        strokeWidth = if (active) 2.6.dp.toPx() else 1.1.dp.toPx()
+                    )
+                }
+
+                // 中心凹陷圆：内外两道细边 + 径向渐变，像 iPod 中间那颗 Select 键
+                drawCircle(Color.Black.copy(alpha = 0.45f), radius * 0.325f, c, style = Stroke(2.dp.toPx()))
+                drawCircle(Color.White.copy(alpha = 0.16f), radius * 0.345f, c, style = Stroke(1.dp.toPx()))
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFF242429), Color(0xFF101013)),
+                        center = Offset(c.x - radius * 0.08f, c.y - radius * 0.1f),
+                        radius = radius * 0.5f
+                    ),
+                    radius = radius * 0.30f,
+                    center = c
+                )
+
+                // 拖动时的跟随点
+                dragAngle?.let { a ->
+                    val rad = a * PI.toFloat() / 180f
+                    val p = Offset(c.x + cos(rad) * radius * 0.74f, c.y + sin(rad) * radius * 0.74f)
+                    drawCircle(Color.Black.copy(alpha = 0.4f), radius * 0.08f, p)
+                    drawCircle(Color.White.copy(alpha = 0.95f), radius * 0.055f, p)
+                }
+            }
+
+            // MENU：上
+            Text(
+                "MENU",
+                color = Color.White.copy(alpha = 0.82f),
+                fontSize = (d.value * 0.040f).sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.sp,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = d * 0.115f)
             )
+            // 上一首 / 倒退：左
+            Icon(
+                Icons.Default.SkipPrevious,
+                contentDescription = "上一首 / 倒退",
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = d * 0.105f)
+                    .size(d * 0.088f)
+            )
+            // 下一首 / 快进：右
+            Icon(
+                Icons.Default.SkipNext,
+                contentDescription = "下一首 / 快进",
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = d * 0.105f)
+                    .size(d * 0.088f)
+            )
+            // 开始 / 暂停：下
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = d * 0.105f)
+                    .size(d * 0.16f)
+                    .scale(bottomScale),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (isPlaying) "暂停" else "播放",
+                    tint = Color.White,
+                    modifier = Modifier.size(d * 0.088f)
+                )
+            }
+            // 中心确认：再叠一层小玻璃，按下去会轻微缩放
+            GlassSurface(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(d * 0.22f)
+                    .scale(centerScale),
+                shape = CircleShape,
+                tint = Color(0xFF2A2A30),
+                tintAlpha = 0.85f,
+                elevation = 6.dp,
+                forceDark = true
+            ) { }
         }
     }
 }
 
-private val WheelInk = Color(0xFF4A4A4E)
+private enum class WheelZone { NONE, TOP, LEFT, RIGHT, BOTTOM, CENTER }
 
-/** 每格角度：约 9.5 格一圈，转动一格切一首，手感接近 iPod 的段落感。 */
-private const val STEP_DEGREES = 38f
+private fun hitZone(p: Offset, size: IntSize): WheelZone {
+    val c = Offset(size.width / 2f, size.height / 2f)
+    val dx = p.x - c.x
+    val dy = p.y - c.y
+    val r = hypot(dx, dy)
+    val radius = minOf(size.width, size.height) / 2f
+    if (r > radius * 1.05f) return WheelZone.NONE
+    if (r <= radius * 0.31f) return WheelZone.CENTER
+    val deg = Math.toDegrees(atan2(dy, dx).toDouble()).toFloat()
+    return when {
+        deg in -135f..-45f -> WheelZone.TOP
+        deg in 45f..135f -> WheelZone.BOTTOM
+        deg < -135f || deg > 135f -> WheelZone.LEFT
+        else -> WheelZone.RIGHT
+    }
+}
 
-/** 两次切歌的最短间隔，避免猛甩一圈连切十几首。 */
-private const val MIN_TICK_INTERVAL_MS = 190L
+/** 每格角度：10°，与外圈 36 根刻度一一对应。 */
+private const val STEP_DEGREES = 36f
+
+/** 两次反馈的最短间隔，避免猛甩一圈连调过头。 */
+private const val MIN_TICK_INTERVAL_MS = 150L
 
 private fun angleOf(p: Offset, c: Offset): Float =
     Math.toDegrees(atan2(p.y - c.y, p.x - c.x).toDouble()).toFloat()

@@ -7,6 +7,7 @@ import org.json.JSONObject
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -148,6 +149,8 @@ class MusicBoxApp : Application() {
     val visibleTabs = MutableStateFlow<List<String>>(LibraryTabs.default)
     /** 播放音质：默认原采样率直通。 */
     val audioQuality = MutableStateFlow(AudioQuality.ORIGINAL)
+    /** 转轮音量：0f~1f，设置后立即写入 ExoPlayer 并落盘。 */
+    val volume = MutableStateFlow(1f)
     /**
      * 调试模式（默认关闭）。开启后全量运行日志才会写盘 / 输出到下载目录；
      * 关闭时调试日志完全停用（仅 Logcat 静默），也可在设置里手动切换。
@@ -353,6 +356,13 @@ class MusicBoxApp : Application() {
         dataStore.edit { it[Q_QUALITY] = q.name }
     }
 
+    suspend fun setVolume(v: Float) {
+        val safe = v.coerceIn(0f, 1f)
+        volume.value = safe
+        PlayerController.setVolume(safe)
+        dataStore.edit { it[P_VOLUME] = safe }
+    }
+
     companion object {
         lateinit var instance: MusicBoxApp
             private set
@@ -458,6 +468,7 @@ class MusicBoxApp : Application() {
             if (ordered.isNotEmpty()) visibleTabs.value = ordered
         }
         p[Q_QUALITY]?.let { runCatching { audioQuality.value = AudioQuality.valueOf(it) } }
+        p[P_VOLUME]?.let { runCatching { volume.value = it.coerceIn(0f, 1f) } }
         // 调试模式：从持久化读取并同步给 CrashLogger（默认关闭，避免常驻日志 I/O）
         val dbg = p[D_DEBUG] ?: false
         debugMode.value = dbg
@@ -761,4 +772,5 @@ private val T_TABS = stringPreferencesKey("visible_tabs")
 /** 标记 visible_tabs 是否已按「有序列表」格式保存（老版本是无序 Set）。 */
 private val T_TABS_ORDERED = booleanPreferencesKey("visible_tabs_ordered_v2")
 private val Q_QUALITY = stringPreferencesKey("audio_quality")
+private val P_VOLUME = floatPreferencesKey("wheel_volume")
 private val D_DEBUG = booleanPreferencesKey("debug_mode")

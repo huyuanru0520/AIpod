@@ -63,6 +63,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -100,10 +101,12 @@ import com.musicbox.nas.data.Track
 import com.musicbox.nas.player.PlayerController
 import com.musicbox.nas.ui.components.BareCover
 import com.musicbox.nas.ui.components.ClickWheel
+import com.musicbox.nas.ui.components.WheelMode
 import com.musicbox.nas.ui.components.CoverImage
 import com.musicbox.nas.ui.components.HiResBadge
 import com.musicbox.nas.ui.components.rememberCoverBitmap
 import com.musicbox.nas.util.formatDuration
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlin.math.abs
@@ -135,6 +138,21 @@ fun PlayerScreen(navController: NavController) {
     val current = if (idx in queue.indices) queue[idx] else null
 
     var showQueue by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val volume by MusicBoxApp.instance.volume.collectAsState()
+    // 进度模式下不订阅 position（避免整页每 500ms 重组）：暂停瞬间取一次快照，
+    // 之后转轮每格自己推进快照并 seek，界面跟手更新。
+    var progressSnapshot by remember { mutableLongStateOf(PlayerController.currentPositionMs()) }
+    var volumeHint by remember { mutableStateOf(false) }
+    LaunchedEffect(isPlaying) {
+        if (!isPlaying) progressSnapshot = PlayerController.currentPositionMs()
+    }
+    LaunchedEffect(volumeHint) {
+        if (volumeHint) {
+            kotlinx.coroutines.delay(1400L)
+            volumeHint = false
+        }
+    }
 
     // 横屏：整页改为「左侧封面 + 右侧歌词」的沉浸式布局，背景取当前封面主色调并模糊
     val isLandscape =
@@ -163,13 +181,21 @@ fun PlayerScreen(navController: NavController) {
         CoverBackdrop(current)
         // 播放页保留状态栏（见 MainActivity.keepStatusBarVisible）：内容从状态栏下方开始，
         // 但背景仍在 Box 里铺满整屏，状态栏透出的是封面模糊图而不是黑条。
-        //
-        // 竖屏布局：顶部信息条 → 中间「封面 / 歌词」→ 进度条 → iPod 点击转轮。
-        // 转轮的所有操作（转、按）都在 ClickWheel 内部完成，页面只负责把动作接到播放器。
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {
-            // 转轮尺寸：宽度优先，同时给封面和进度条留出空间；小屏再按高度收一档
             val wheel = minOf(maxWidth * 0.64f, maxHeight * 0.40f, 286.dp)
             var showLyrics by remember { mutableStateOf(false) }
+            // 播放时转轮调音量；按下「下」键暂停后，中间切到大进度条，转轮改为调进度
+            val wheelMode = if (isPlaying) WheelMode.VOLUME else WheelMode.PROGRESS
+            val body = when {
+                wheelMode == WheelMode.PROGRESS -> "progress"
+                showLyrics -> "lyrics"
+                else -> "cover"
+            }
+            fun seekBy(deltaMs: Long) {
+                val next = (progressSnapshot + deltaMs).coerceIn(0L, duration.coerceAtLeast(0L))
+                progressSnapshot = next
+                PlayerController.seekTo(next)
+            }
 
             Column(Modifier.fillMaxSize().navigationBarsPadding()) {
                 IpodTopBar(
@@ -207,15 +233,19 @@ fun PlayerScreen(navController: NavController) {
                     }
                 } else {
                     val c = current
-                    // 中间区域：默认是专辑封面 + 歌名，轻点封面切到滚动歌词（转轮保持不动）
+                    // 中间区域：音量模式显示封面 / 歌词；进度模式显示大进度条
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         Crossfade(
-                            targetState = showLyrics,
+                            targetState = body,
                             animationSpec = tween(durationMillis = 180),
                             label = "ipodBody"
-                        ) { lyricsMode ->
-                            if (lyricsMode) {
-                                Box(Modifier.fillMaxSize()) {
+                        ) { view ->
+                            when (view) {
+                                "progress" -> WheelProgressPanel(
+                                    positionMs = progressSnapshot,
+                                    durationMs = duration
+                                )
+                                "lyrics" -> Box(Modifier.fillMaxSize()) {
                                     LyricsView(
                                         current = c,
                                         textColor = Color.White.copy(alpha = 0.55f),
@@ -224,7 +254,6 @@ fun PlayerScreen(navController: NavController) {
                                         largeText = true,
                                         fadeByDistance = true
                                     )
-                                    // 歌词页留一个返回封面的小胶囊，避免用户找不到路
                                     Text(
                                         "封面",
                                         color = Color.White.copy(alpha = 0.85f),
@@ -238,31 +267,67 @@ fun PlayerScreen(navController: NavController) {
                                             .padding(horizontal = 12.dp, vertical = 6.dp)
                                     )
                                 }
-                            } else {
-                                NowPlayingArt(track = c, onShowLyrics = { showLyrics = true })
+                                else -> NowPlayingArt(track = c, onShowLyrics = { showLyrics = true })
                             }
                         }
                     }
 
-                    // 进度条：转轮上方一条细线 + 时间，拖动行为与之前一致（松手才 seek）
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
-                        SeekBar(
-                            duration = duration,
-                            inactiveColor = Color.White.copy(alpha = 0.22f),
-                            labelColor = Color.White.copy(alpha = 0.6f),
-                            onSeek = { PlayerController.seekTo(it) }
-                        )
+                    // 转动音量时给一个短暂反馈，松手 1.4 秒后淡出
+                    if (wheelMode == WheelMode.VOLUME && volumeHint) {
+                        Row(
+                            Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .padding(top = 4.dp)
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(Color.Black.copy(alpha = 0.42f))
+                                .padding(horizontal = 14.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "音量 ${(volume * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    // 进度模式下大进度条已经占用中间区，这里不再重复绘制细进度条
+                    if (wheelMode == WheelMode.VOLUME) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
+                            SeekBar(
+                                duration = duration,
+                                inactiveColor = Color.White.copy(alpha = 0.22f),
+                                labelColor = Color.White.copy(alpha = 0.6f),
+                                onSeek = { PlayerController.seekTo(it) }
+                            )
+                        }
+                    } else {
+                        Spacer(Modifier.height(24.dp))
                     }
                     Spacer(Modifier.height(2.dp))
 
                     ClickWheel(
                         diameter = wheel,
+                        mode = wheelMode,
                         isPlaying = isPlaying,
+                        onRotate = { steps ->
+                            if (wheelMode == WheelMode.VOLUME) {
+                                val next = MusicBoxApp.instance.volume.value + steps * 0.04f
+                                volumeHint = true
+                                scope.launch { MusicBoxApp.instance.setVolume(next) }
+                            } else {
+                                seekBy(steps * 5000L)
+                            }
+                        },
                         onPlayPause = { if (isPlaying) PlayerController.pause() else PlayerController.play() },
-                        onPrevious = { PlayerController.previous() },
-                        onNext = { PlayerController.next() },
+                        onPrevious = {
+                            if (wheelMode == WheelMode.VOLUME) PlayerController.previous() else seekBy(-10_000L)
+                        },
+                        onNext = {
+                            if (wheelMode == WheelMode.VOLUME) PlayerController.next() else seekBy(10_000L)
+                        },
                         onMenu = { navController.popBackStack() },
-                        onSelect = { showQueue = true },
+                        onConfirm = { showQueue = true },
                         modifier = Modifier.align(Alignment.CenterHorizontally)
                     )
                     Spacer(Modifier.height(8.dp))
@@ -381,6 +446,63 @@ private fun IpodTopBar(
                 )
             }
         }
+    }
+}
+
+/**
+ * 暂停后的「进度模式」：中间区从封面切成大进度条，转轮每格前进/后退 5 秒。
+ * 这里刻意不订阅 position，位置由页面里的 progressSnapshot 推着走。
+ */
+@Composable
+private fun WheelProgressPanel(positionMs: Long, durationMs: Long) {
+    val progress = if (durationMs > 0L) {
+        (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 30.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            "进度调整 · 转动转轮",
+            style = MaterialTheme.typography.labelMedium,
+            color = Color.White.copy(alpha = 0.55f)
+        )
+        Spacer(Modifier.height(14.dp))
+        Text(
+            formatDuration(positionMs),
+            style = MaterialTheme.typography.headlineLarge,
+            color = Color.White
+        )
+        Spacer(Modifier.height(12.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(Color.White.copy(alpha = 0.18f))
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(progress)
+                    .fillMaxHeight()
+                    .background(Color(0xFFFA2D48))
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("0:00", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f))
+            Text(formatDuration(durationMs), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f))
+        }
+        Spacer(Modifier.height(18.dp))
+        Text(
+            "左键倒退 10 秒 · 右键快进 10 秒 · 下键返回播放",
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White.copy(alpha = 0.45f),
+            textAlign = TextAlign.Center
+        )
     }
 }
 
