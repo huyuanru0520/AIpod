@@ -39,11 +39,11 @@ object Haptics {
 
     /** 转轮滚过一格：短、脆，像金属齿轮的一下。 */
     fun tick(context: Context, view: View?) =
-        fire(context, view, tickFeedback, 28L, 200, "tick")
+        fire(context, view, tickFeedback, 12L, 95, "tick")
 
     /** 按下 MENU / 切歌 / 播放键：略长，像机械按键到位。 */
     fun click(context: Context, view: View?) =
-        fire(context, view, clickFeedback, 46L, 235, "click")
+        fire(context, view, clickFeedback, 32L, 180, "click")
 
     private fun fire(context: Context, view: View?, feedback: Int, ms: Long, amp: Int, tag: String) {
         var viewOk = false

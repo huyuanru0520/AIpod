@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -81,6 +82,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalConfiguration
@@ -140,6 +142,11 @@ fun PlayerScreen(navController: NavController) {
     val scope = rememberCoroutineScope()
     val volume by MusicBoxApp.instance.volume.collectAsState()
     var volumeHint by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }      // MENU：本页队列列表
+    var progressMode by remember { mutableStateOf(false) }   // 中心键：进度模式
+    var selectedQueueIndex by remember { mutableStateOf(idx.coerceAtLeast(0)) }
+    LaunchedEffect(menuOpen) { if (menuOpen) selectedQueueIndex = idx.coerceAtLeast(0) }
+    LaunchedEffect(idx) { if (!menuOpen) selectedQueueIndex = idx.coerceAtLeast(0) }
     LaunchedEffect(volumeHint) {
         if (volumeHint) {
             kotlinx.coroutines.delay(1400L)
@@ -177,8 +184,13 @@ fun PlayerScreen(navController: NavController) {
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {
             val wheel = minOf(maxWidth * 0.64f, maxHeight * 0.40f, 286.dp)
             var showLyrics by remember { mutableStateOf(false) }
-            // iPod 原生：播放页转轮只调音量，进度靠长按左右键快退 / 快进
-            val body = if (showLyrics) "lyrics" else "cover"
+            // 转轮随当前界面切换职责：队列选歌 / 调进度 / 调音量
+            val body = when {
+                menuOpen -> "menu"
+                progressMode -> "progress"
+                showLyrics -> "lyrics"
+                else -> "cover"
+            }
             // 长按快退/快进：直接读播放器当前位置，不订阅 position，避免整页每 500ms 重组
             fun seekBy(deltaMs: Long) {
                 val base = PlayerController.currentPositionMs()
@@ -230,6 +242,13 @@ fun PlayerScreen(navController: NavController) {
                             label = "ipodBody"
                         ) { view ->
                             when (view) {
+                                "menu" -> QueueMenuList(
+                                    queue = queue,
+                                    selectedIndex = selectedQueueIndex,
+                                    currentIndex = idx,
+                                    onSelect = { selectedQueueIndex = it }
+                                )
+                                "progress" -> WheelProgressPanel(durationMs = duration)
                                 "lyrics" -> Box(Modifier.fillMaxSize()) {
                                     LyricsView(
                                         current = c,
@@ -258,7 +277,7 @@ fun PlayerScreen(navController: NavController) {
                     }
 
                     // 转动音量时给一个短暂反馈，松手 1.4 秒后淡出
-                    if (volumeHint) {
+                    if (volumeHint && !progressMode && !menuOpen) {
                         Row(
                             Modifier
                                 .align(Alignment.CenterHorizontally)
@@ -276,36 +295,60 @@ fun PlayerScreen(navController: NavController) {
                         }
                     }
 
-                    // 细进度条始终在：拖动它也能直接跳进度，与转轮的音量职责分开
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
-                        SeekBar(
-                            duration = duration,
-                            inactiveColor = Color.White.copy(alpha = 0.22f),
-                            labelColor = Color.White.copy(alpha = 0.6f),
-                            onSeek = { PlayerController.seekTo(it) }
-                        )
+                    if (!progressMode && !menuOpen) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
+                            SeekBar(
+                                duration = duration,
+                                inactiveColor = Color.White.copy(alpha = 0.22f),
+                                labelColor = Color.White.copy(alpha = 0.6f),
+                                onSeek = { PlayerController.seekTo(it) }
+                            )
+                        }
                     }
                     Spacer(Modifier.height(2.dp))
 
                     ClickWheel(
                         diameter = wheel,
                         isPlaying = isPlaying,
+                        centerActive = progressMode,
                         onRotate = { steps ->
-                            val next = MusicBoxApp.instance.volume.value + steps * 0.04f
-                            volumeHint = true
-                            scope.launch { MusicBoxApp.instance.setVolume(next) }
+                            when {
+                                menuOpen -> {
+                                    selectedQueueIndex =
+                                        (selectedQueueIndex + steps).coerceIn(0, queue.lastIndex.coerceAtLeast(0))
+                                }
+                                progressMode -> seekBy(steps * 5_000L)
+                                else -> {
+                                    val next = MusicBoxApp.instance.volume.value + steps * 0.04f
+                                    volumeHint = true
+                                    scope.launch { MusicBoxApp.instance.setVolume(next) }
+                                }
+                            }
                         },
                         onPlayPause = { if (isPlaying) PlayerController.pause() else PlayerController.play() },
-                        onPrevious = { PlayerController.previous() },
-                        onNext = { PlayerController.next() },
+                        onPrevious = { if (progressMode) seekBy(-5_000L) else PlayerController.previous() },
+                        onNext = { if (progressMode) seekBy(5_000L) else PlayerController.next() },
                         onRewind = { seekBy(-5_000L) },
                         onForward = { seekBy(5_000L) },
-                        onMenu = { navController.popBackStack() },
-                        onMenuHome = { navController.popBackStack("library", false) },
-                        onConfirm = { showQueue = true },
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                        onMenu = { menuOpen = !menuOpen; if (!menuOpen) progressMode = false },
+                        onMenuHome = { menuOpen = false; progressMode = false; navController.popBackStack("library", false) },
+                        onConfirm = {
+                            when {
+                                menuOpen -> {
+                                    queue.getOrNull(selectedQueueIndex)?.let { t ->
+                                        PlayerController.playTracks(queue, selectedQueueIndex)
+                                        menuOpen = false
+                                    }
+                                }
+                                else -> progressMode = !progressMode
+                            }
+                        },
+                        // 略微上移，避免整块压在屏幕底部
+                        modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .offset(y = (-18).dp)
                     )
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(24.dp))
                 }
             }
         }
@@ -316,6 +359,145 @@ fun PlayerScreen(navController: NavController) {
         showQueue = showQueue, queue = queue, currentIndex = idx,
         shuffle = shuffle, repeatMode = repeatMode
     ) { showQueue = false }
+}
+
+/**
+ * MENU 打开的本页队列：滚轮上下选歌，中心键确认播放。
+ * 不跳转主界面，选完直接回到封面。
+ */
+@Composable
+private fun QueueMenuList(
+    queue: List<Track>,
+    selectedIndex: Int,
+    currentIndex: Int,
+    onSelect: (Int) -> Unit
+) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(selectedIndex) {
+        if (selectedIndex in queue.indices) {
+            runCatching { listState.animateScrollToItem(selectedIndex) }
+        }
+    }
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 18.dp)
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("播放队列", style = MaterialTheme.typography.titleSmall, color = Color.White)
+            Spacer(Modifier.weight(1f))
+            Text(
+                "滚轮选歌 · 中心确认",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.5f)
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        LazyColumn(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            state = listState,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            itemsIndexed(queue) { i, t ->
+                val selected = i == selectedIndex
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (selected) Color.White.copy(alpha = 0.20f)
+                            else Color.White.copy(alpha = 0.04f)
+                        )
+                        .clickable { onSelect(i) }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "${i + 1}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selected) Color.White else Color.White.copy(alpha = 0.45f),
+                        modifier = Modifier.width(28.dp)
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            t.title,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (selected) Color.White else Color.White.copy(alpha = 0.78f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            t.artist.ifBlank { "未知歌手" },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.45f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    if (i == currentIndex) {
+                        Text("♪", color = Color(0xFFFA2D48), style = MaterialTheme.typography.titleSmall)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 中心 Home 键进入的进度模式：只有这一块订阅 position，不会牵动整页重组。 */
+@Composable
+private fun WheelProgressPanel(durationMs: Long) {
+    val positionMs by PlayerController.position.collectAsState()
+    val progress = if (durationMs > 0L) {
+        (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 30.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            "歌曲进度 · 滚轮快进快退",
+            style = MaterialTheme.typography.labelMedium,
+            color = Color.White.copy(alpha = 0.55f)
+        )
+        Spacer(Modifier.height(14.dp))
+        Text(
+            formatDuration(positionMs),
+            style = MaterialTheme.typography.headlineLarge,
+            color = Color.White
+        )
+        Spacer(Modifier.height(12.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(Color.White.copy(alpha = 0.18f))
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(progress)
+                    .fillMaxHeight()
+                    .background(Color(0xFFFA2D48))
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("0:00", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f))
+            Text(formatDuration(durationMs), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f))
+        }
+        Spacer(Modifier.height(18.dp))
+        Text(
+            "再按一次中心键退出",
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White.copy(alpha = 0.45f),
+            textAlign = TextAlign.Center
+        )
+    }
 }
 
 /**
