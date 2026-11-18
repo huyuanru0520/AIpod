@@ -4,7 +4,7 @@ import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 
-enum class SourceType { WEBDAV, FNOS, M3U }
+enum class SourceType { WEBDAV, FNOS, M3U, LOCAL }
 
 /** Unified track model used across all sources (WebDAV / FnOS / M3U). */
 data class Track(

@@ -544,6 +544,7 @@ internal sealed class WheelNode(val title: String, val hint: String) {
     object Playlists : WheelNode("歌单", "没有歌单")
     object Folders : WheelNode("文件夹", "没有文件夹")
     object Genres : WheelNode("风格", "没有风格分类")
+    object Favorites : WheelNode("我的收藏", "还没有收藏歌曲 · 播放页长按播放键收藏")
     object Search : WheelNode("搜索", "输入关键词搜索歌曲")
     data class Folder(val path: String?, val label: String) : WheelNode(label, "此文件夹没有歌曲")
     data class AlbumDetail(val entry: SourceEntry) : WheelNode(entry.name, "没有歌曲")
@@ -578,6 +579,13 @@ private suspend fun loadNode(node: WheelNode, data: SourceBrowserData): List<Whe
     WheelNode.Genres -> data.loadGenres().map {
         WheelItem.Op(WheelNode.GenreDetail(it), it.name, it.subtitle, it.coverUrl, it.embeddedAudioUrl)
     }
+    WheelNode.Favorites -> {
+        // 从当前音源曲库中筛出已收藏曲目（收藏按 WebDAV/FNOS/本地 分表，取当前源那一表）
+        val favIds = MusicBoxApp.instance.currentFavorites()
+        val all = data.loadSongs(1).first
+        val favTracks = all.filter { it.id in favIds }
+        favTracks.mapIndexed { i, t -> t.toWheel(i, favTracks) }
+    }
     is WheelNode.Folder -> {
         val (folders, tracks) = data.loadFolders(node.path)
         buildFolderItems(folders, tracks, data, node.path)
@@ -606,6 +614,7 @@ private fun buildRoot(data: SourceBrowserData): List<WheelItem> {
     val cur = q.getOrNull(PlayerController.currentIndex.value)
     val nowSub = if (cur != null) "${cur.title} · ${cur.artist}" else "打开播放器"
     out += WheelItem.Action("now_playing", "正在播放", nowSub, Icons.Default.PlayArrow)
+    out += WheelItem.Op(WheelNode.Favorites, "我的收藏", "已收藏的歌曲", null)
     if (has(LibraryTabs.SONGS)) out += WheelItem.Op(WheelNode.Songs, "歌曲", "全部曲目", null)
     if (has(LibraryTabs.ALBUMS)) out += WheelItem.Op(WheelNode.Albums, "专辑", "按专辑浏览", null)
     if (has(LibraryTabs.ARTISTS)) out += WheelItem.Op(WheelNode.Artists, "歌手", "按歌手浏览", null)

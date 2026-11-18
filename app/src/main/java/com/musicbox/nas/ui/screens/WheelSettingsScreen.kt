@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SaveAs
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -136,6 +137,10 @@ fun WheelSettingsScreen(navController: NavController) {
     var transcodeSize by remember { mutableStateOf(AacTranscoder.cacheSize()) }
     var coverCacheSize by remember { mutableStateOf(coverCacheSizeBytes()) }
     var showLogs by remember { mutableStateOf(false) }
+    var localScanning by remember { mutableStateOf(false) }
+    var localScanProgress by remember { mutableStateOf("") }
+    val localTracks by app.localLibrary.collectAsState()
+    val localCount = localTracks.size
     // 日志导出：下载目录里日志文件的真实路径、大小与写入通道结果
     var logInfo by remember { mutableStateOf(runCatching { CrashLogger.logFileInfo() }.getOrDefault("")) }
 
@@ -176,6 +181,28 @@ fun WheelSettingsScreen(navController: NavController) {
             statusLine = res
         }
     }
+    // 本地音乐：SAF 选文件夹 → 递归扫描音频 → 保存到本地曲库
+    val localFolderLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        // 取得可持久读取授权，冷启动仍可访问这棵子树
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+        scope.launch {
+            localScanning = true
+            statusLine = "正在扫描本地音乐…"
+            val tracks = com.musicbox.nas.scan.LocalMusicScanner.scan(context, uri) { n, name ->
+                localScanProgress = "已找到 $n 首 · ${name.take(20)}"
+            }
+            app.setLocalLibrary(tracks)
+            localScanning = false
+            statusLine = "本地扫描完成：${tracks.size} 首"
+        }
+    }
     // 日志另存：用系统文件选择器自选位置写出完整日志（滚轮页无触摸，由转轮选中后触发）
     val logSaveLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/plain")
@@ -200,7 +227,7 @@ fun WheelSettingsScreen(navController: NavController) {
     val items: List<SettingItem> = when (node) {
         SettingsNode.Root -> buildRootSettings(
             sourceMode, audioQuality, scanPace, hapticStrength, debugMode, showDescriptions,
-            webDav, fnos, webDavScanning, coverCacheSize, transcodeSize
+            webDav, fnos, webDavScanning, coverCacheSize, transcodeSize, localCount, localScanning
         )
         SettingsNode.Tabs -> buildTabsSettings(visibleTabs)
         SettingsNode.Logs -> buildLogsSettings(debugMode, logInfo)
@@ -228,7 +255,12 @@ fun WheelSettingsScreen(navController: NavController) {
             is SettingItem.Choice -> when (item.key) {
                 "haptic" -> scope.launch { app.setHapticStrength((hapticStrength + 1) % 4) }
                 "source" -> scope.launch {
-                    app.setSource(if (sourceMode == SourceMode.WEBDAV) SourceMode.FNOS else SourceMode.WEBDAV)
+                    val next = when (sourceMode) {
+                        SourceMode.WEBDAV -> SourceMode.FNOS
+                        SourceMode.FNOS -> SourceMode.LOCAL
+                        SourceMode.LOCAL -> SourceMode.WEBDAV
+                    }
+                    app.setSource(next)
                 }
                 "quality" -> scope.launch {
                     app.setAudioQuality(if (audioQuality == AudioQuality.ORIGINAL) AudioQuality.AAC_256 else AudioQuality.ORIGINAL)
@@ -255,6 +287,7 @@ fun WheelSettingsScreen(navController: NavController) {
                     if (c == null) statusLine = "请先保存 WebDAV 连接"
                     else { statusLine = "开始扫描 WebDAV…"; app.startWebDavScan(c) }
                 }
+                "scanlocal" -> localFolderLauncher.launch(null)
                 "test" -> {
                     val c = webDav
                     if (c == null) statusLine = "请先保存 WebDAV 连接"
@@ -454,9 +487,13 @@ private fun SettingItem.subtitle(): String = when (this) {
 private fun buildRootSettings(
     source: SourceMode, quality: AudioQuality,
     scanPace: Long, haptic: Int, debug: Boolean, showDescriptions: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
-    coverSize: Long, transcodeSize: Long
+    coverSize: Long, transcodeSize: Long, localCount: Int, localScanning: Boolean
 ): List<SettingItem> {
-    val sourceName = if (source == SourceMode.WEBDAV) "WebDAV" else "飞牛音乐"
+    val sourceName = when (source) {
+        SourceMode.WEBDAV -> "WebDAV"
+        SourceMode.FNOS -> "飞牛音乐"
+        SourceMode.LOCAL -> "本地音乐"
+    }
     val qualityName = quality.label
     val paceName = ScanPace.options.firstOrNull { it.intervalMs == scanPace }?.label ?: "均衡"
     val hapticName = when (haptic) { 0 -> "关闭"; 1 -> "弱"; 2 -> "中"; else -> "强" }
@@ -468,6 +505,7 @@ private fun buildRootSettings(
     out += SettingItem.Choice("haptic", "震动强度", hapticName, Icons.Default.Vibration)
     out += SettingItem.Nav("webdav", "WebDAV 连接", if (webDav != null) "已配置" else "未配置", Icons.Default.Link)
     out += SettingItem.Nav("fnos", "飞牛音乐登录", if (fnos != null) "已登录" else "未登录", Icons.Default.Storage)
+    out += SettingItem.Action("scanlocal", "扫描本地音乐", if (localScanning) "扫描中…" else "已收录 $localCount 首 · 选文件夹", Icons.Default.Folder)
     out += SettingItem.Action("scan", "立即扫描 WebDAV", if (scanning) "扫描中…" else "扫描音乐库", Icons.Default.Storage)
     out += SettingItem.Action("test", "测试连接 / 诊断", "WebDAV 连接自检", Icons.Default.Link)
     out += SettingItem.Action("probe", "检测飞牛新接口", "风格 / 文件夹 / 漫游", Icons.Default.Storage)

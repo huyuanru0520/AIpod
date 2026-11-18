@@ -148,16 +148,16 @@ fun PlayerScreen(navController: NavController) {
     var showQueue by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val volume by MusicBoxApp.instance.volume.collectAsState()
-    var volumeHint by remember { mutableStateOf(false) }
+    var volumeActive by remember { mutableStateOf(false) }   // 滚轮调音量时，进度条就地变音量条
     var menuOpen by remember { mutableStateOf(false) }      // MENU：本页队列列表
     var progressMode by remember { mutableStateOf(false) }   // 中心键：进度模式
     var selectedQueueIndex by remember { mutableStateOf(idx.coerceAtLeast(0)) }
     LaunchedEffect(menuOpen) { if (menuOpen) selectedQueueIndex = idx.coerceAtLeast(0) }
     LaunchedEffect(idx) { if (!menuOpen) selectedQueueIndex = idx.coerceAtLeast(0) }
-    LaunchedEffect(volumeHint) {
-        if (volumeHint) {
-            kotlinx.coroutines.delay(1400L)
-            volumeHint = false
+    LaunchedEffect(volumeActive) {
+        if (volumeActive) {
+            kotlinx.coroutines.delay(1600L)
+            volumeActive = false
         }
     }
 
@@ -204,9 +204,7 @@ fun PlayerScreen(navController: NavController) {
 
             Column(Modifier.fillMaxSize().navigationBarsPadding()) {
                 IpodTopBar(
-                    track = current,
                     showLyrics = showLyrics,
-                    onQueueClick = { showQueue = true },
                     onBack = { navController.popBackStack() }
                 )
 
@@ -289,38 +287,24 @@ fun PlayerScreen(navController: NavController) {
                         }
                     }
 
-                    // 转动音量时给一个短暂反馈，松手 1.4 秒后淡出
-                    if (volumeHint && !progressMode && !menuOpen && !showLyrics) {
-                        Row(
-                            Modifier
-                                .align(Alignment.CenterHorizontally)
-                                .padding(top = 4.dp)
-                                .clip(RoundedCornerShape(18.dp))
-                                .background(Color.Black.copy(alpha = 0.42f))
-                                .padding(horizontal = 14.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "音量 ${(volume * 100).toInt()}%",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White
-                            )
-                        }
-                    }
-
-                    // 进度条常驻（封面 / 歌词都显示）。中心键进入进度模式时，
-                    // 只把这段红色进度标记加粗——不再弹出任何独立 HUD 面板。
+                    // 进度条常驻（封面 / 歌词都显示）。滚轮调音量时，这条进度条就地
+                    // 替换成音量条（iPod 式）——不再弹独立提示框，封面尺寸不受影响。
+                    // 中心键进进度模式时进度条加粗红色标记，作为「正在调进度」反馈。
                     if (!menuOpen) {
                         Column(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
-                            SeekBar(
-                                duration = duration,
-                                activeColor = BrandRed,
-                                thumbColor = BrandRed,
-                                inactiveColor = Color.White.copy(alpha = 0.22f),
-                                labelColor = Color.White.copy(alpha = 0.6f),
-                                emphasized = progressMode,
-                                onSeek = { PlayerController.seekTo(it) }
-                            )
+                            if (volumeActive && !progressMode) {
+                                VolumeBar(volume = volume)
+                            } else {
+                                SeekBar(
+                                    duration = duration,
+                                    activeColor = BrandRed,
+                                    thumbColor = BrandRed,
+                                    inactiveColor = Color.White.copy(alpha = 0.22f),
+                                    labelColor = Color.White.copy(alpha = 0.6f),
+                                    emphasized = progressMode,
+                                    onSeek = { PlayerController.seekTo(it) }
+                                )
+                            }
                         }
                     }
                     Spacer(Modifier.height(2.dp))
@@ -346,12 +330,14 @@ fun PlayerScreen(navController: NavController) {
                                 }
                                 else -> {
                                     val next = MusicBoxApp.instance.volume.value + steps * 0.04f
-                                    volumeHint = true
+                                    volumeActive = true
                                     scope.launch { MusicBoxApp.instance.setVolume(next) }
                                 }
                             }
                         },
                         onPlayPause = { if (isPlaying) PlayerController.pause() else PlayerController.play() },
+                        // 长按播放键：进入歌曲详情（metadata + 收藏）
+                        onPlayLongPress = { if (current != null) navController.navigate("songdetail") },
                         onPrevious = { if (progressMode) seekBy(-5_000L) else PlayerController.previous() },
                         onNext = { if (progressMode) seekBy(5_000L) else PlayerController.next() },
                         onRewind = { seekBy(-5_000L) },
@@ -521,19 +507,14 @@ private fun WheelProgressHud(durationMs: Long) {
 }
 
 /**
- * 播放页顶栏：返回 /「正在播放」/ 队列 / 更多。
- * 不再显示小封面、歌名与歌词切换按钮——歌词改由长按中心键切换。
+ * 播放页顶栏：返回 /「正在播放」。
+ * 右上角的播放队列与更多菜单已移除——歌词由长按中心键切换，歌曲详情由长按播放键进入。
  */
 @Composable
 private fun IpodTopBar(
-    track: Track?,
     showLyrics: Boolean,
-    onQueueClick: () -> Unit,
     onBack: () -> Unit
 ) {
-    var menu by remember { mutableStateOf(false) }
-    var showArt by remember { mutableStateOf(false) }
-    val context = LocalContext.current
     Row(
         Modifier
             .fillMaxWidth()
@@ -554,66 +535,6 @@ private fun IpodTopBar(
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.55f)
             )
-        }
-        IconButton(onClick = onQueueClick) {
-            Icon(Icons.Default.QueueMusic, contentDescription = "播放队列", tint = Color.White)
-        }
-        Box {
-            IconButton(onClick = { menu = true }) {
-                Icon(Icons.Default.MoreVert, contentDescription = "更多", tint = Color.White)
-            }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                if (track != null) {
-                    DropdownMenuItem(
-                        text = { Text("查看专辑封面") },
-                        onClick = { menu = false; showArt = true }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("复制歌曲信息") },
-                        onClick = {
-                            menu = false
-                            runCatching {
-                                val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                                        as android.content.ClipboardManager
-                                cm.setPrimaryClip(
-                                    android.content.ClipData.newPlainText(
-                                        "歌曲信息",
-                                        "${track.title} - ${track.artist.ifBlank { "未知歌手" }} · ${track.album}"
-                                    )
-                                )
-                            }
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("返回曲库") },
-                        onClick = { menu = false; onBack() }
-                    )
-                }
-                DropdownMenuItem(
-                    text = { Text("清除播放错误") },
-                    onClick = { menu = false; PlayerController.clearError() }
-                )
-            }
-        }
-    }
-    // 大图预览（纯图片、无边框）
-    if (showArt && track != null) {
-        androidx.compose.ui.window.Dialog(onDismissRequest = { showArt = false }) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(340.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.Black),
-                contentAlignment = Alignment.Center
-            ) {
-                BareCover(
-                    url = track.coverUrl,
-                    embeddedAudioUrl = track.embeddedAudioUrl,
-                    modifier = Modifier.fillMaxSize(),
-                    contentDescription = track.title
-                )
-            }
         }
     }
 }
@@ -1042,6 +963,38 @@ private fun SeekBar(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(formatDuration(shown.toLong()), style = MaterialTheme.typography.bodySmall, color = labelColor)
             Text(formatDuration(duration), style = MaterialTheme.typography.bodySmall, color = labelColor)
+        }
+    }
+}
+
+/**
+ * 音量条：进度条就地的 iPod 式替换。滚轮调音量时显示，值为 0..1。
+ * 只读展示（音量由转轮调节），高亮段用品牌红，标签显示百分比。
+ */
+@Composable
+private fun VolumeBar(volume: Float) {
+    val v = volume.coerceIn(0f, 1f)
+    val a by animateFloatAsState(targetValue = 1f, animationSpec = tween(160), label = "volBar")
+    Column(Modifier.fillMaxWidth().alpha(a)) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.22f))
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(v)
+                    .fillMaxHeight()
+                    .clip(CircleShape)
+                    .background(BrandRed)
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("音量", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.6f))
+            Text("${(v * 100).toInt()}%", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.6f))
         }
     }
 }

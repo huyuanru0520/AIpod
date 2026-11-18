@@ -389,6 +389,8 @@ private fun AppRoot() {
     BackHandler {
         CrashLogger.info("Back", "手势返回，当前路由=$route")
         when {
+            // 播放页 / 设置页 / 歌曲详情：吞掉系统返回手势，只能用转轮 MENU / 返回键操作
+            route == "player" || route == "settings" || route == "songdetail" -> Unit
             route != null && route != "library" -> {
                 val popped = runCatching { navController.popBackStack() }.getOrDefault(false)
                 if (!popped) {
@@ -460,6 +462,7 @@ private fun AppRoot() {
                                 fadeOut(tween(180)) + slideOutVertically(tween(220)) { it / 10 }
                             }
                         ) { PlayerScreen(navController) }
+                        composable("songdetail") { com.musicbox.nas.ui.screens.SongDetailScreen(navController) }
                     }
                 }
             }

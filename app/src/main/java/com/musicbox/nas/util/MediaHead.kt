@@ -28,6 +28,20 @@ object MediaHead {
         request(url, "bytes=-$capBytes", capBytes)
 
     private fun request(url: String, range: String, capBytes: Int): ByteArray? = runCatching {
+        // 本地 content:// 文件：走 ContentResolver 读头部，而非 OkHttp Range
+        if (url.startsWith("content://")) {
+            val uri = android.net.Uri.parse(url)
+            val out = ByteArrayOutputStream(256 * 1024)
+            val buf = ByteArray(64 * 1024)
+            MusicBoxApp.instance.contentResolver.openInputStream(uri)?.use { input ->
+                while (out.size() < capBytes) {
+                    val n = input.read(buf)
+                    if (n <= 0) break
+                    out.write(buf, 0, minOf(n, capBytes - out.size()))
+                }
+            } ?: return@runCatching null
+            return@runCatching if (out.size() == 0) null else out.toByteArray()
+        }
         val req = Request.Builder()
             .url(url)
             .header("Range", range)

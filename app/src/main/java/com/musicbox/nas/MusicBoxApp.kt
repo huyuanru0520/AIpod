@@ -38,7 +38,7 @@ val Application.dataStore: DataStore<Preferences> by preferencesDataStore(name =
 enum class ThemeMode { SYSTEM, DARK, LIGHT }
 
 /** 主界面显示的音源：同一时刻只显示一种，在「设置」里切换并持久化。 */
-enum class SourceMode { WEBDAV, FNOS }
+enum class SourceMode { WEBDAV, FNOS, LOCAL }
 
 /** 播放音质：原样直通，或转成 256kbps AAC（体积小、兼容老设备）。 */
 enum class AudioQuality(val label: String) {
@@ -131,6 +131,18 @@ class MusicBoxApp : Application() {
 
     /** WebDAV 全库扫描结果：落盘缓存，冷启动直接恢复，避免每次开 App 都全库扫描。 */
     val webDavLibrary = MutableStateFlow<DavLibrary?>(null)
+
+    /**
+     * 收藏表：飞牛 / 本地 / WebDAV 三张独立表，元素是 Track.id。
+     * 按音源分表，互不串味；用 Set 便于 O(1) 判定与去重，持久化时序列化为 JSON 数组。
+     */
+    val favFnos = MutableStateFlow<Set<String>>(emptySet())
+    val favLocal = MutableStateFlow<Set<String>>(emptySet())
+    val favWebDav = MutableStateFlow<Set<String>>(emptySet())
+
+    /** 本地音乐曲库：扫描本机文件夹得到的曲目，冷启动从 DataStore 恢复。 */
+    val localLibrary = MutableStateFlow<List<Track>>(emptyList())
+
     val webDavScanProgress = MutableStateFlow("")
     val webDavScanning = MutableStateFlow(false)
     /** 一次进程生命周期内最多自动全库扫描一次；失败也不反复重试冲击网盘。 */
@@ -497,6 +509,12 @@ class MusicBoxApp : Application() {
             sourceMode.value = if (fnosLoggedIn.value && webDavConn.value == null)
                 SourceMode.FNOS else SourceMode.WEBDAV
         }
+        // 收藏三表：JSON 数组字符串 → Set
+        favWebDav.value = p[FAV_WEBDAV]?.let { decodeIds(it) } ?: emptySet()
+        favFnos.value = p[FAV_FNOS]?.let { decodeIds(it) } ?: emptySet()
+        favLocal.value = p[FAV_LOCAL]?.let { decodeIds(it) } ?: emptySet()
+        // 本地音乐曲库：从 JSON 恢复扫描结果
+        p[LOCAL_LIBRARY]?.let { runCatching { localLibrary.value = decodeTracks(it) } }
         // 有缓存就直接恢复索引，冷启动不再发起整库 PROPFIND
         restoreDavLibraryCache()
         CrashLogger.mark(
@@ -660,6 +678,96 @@ class MusicBoxApp : Application() {
         CrashLogger.info("Settings", "震动强度=$v")
     }
 
+    // ---- 收藏三表（按音源分表）----
+
+    /** 该曲目所属音源的收藏表。M3U 归到 WebDAV。 */
+    private fun favoritesOf(source: com.musicbox.nas.data.SourceType): MutableStateFlow<Set<String>> =
+        when (source) {
+            com.musicbox.nas.data.SourceType.FNOS -> favFnos
+            com.musicbox.nas.data.SourceType.LOCAL -> favLocal
+            else -> favWebDav
+        }
+
+    fun isFavorite(track: Track): Boolean = favoritesOf(track.source).value.contains(track.id)
+
+    /** 切换收藏状态，返回切换后是否为收藏。 */
+    suspend fun toggleFavorite(track: Track): Boolean {
+        val table = favoritesOf(track.source)
+        val next = if (table.value.contains(track.id)) table.value - track.id else table.value + track.id
+        table.value = next
+        val key = when (track.source) {
+            com.musicbox.nas.data.SourceType.FNOS -> FAV_FNOS
+            com.musicbox.nas.data.SourceType.LOCAL -> FAV_LOCAL
+            else -> FAV_WEBDAV
+        }
+        dataStore.edit { it[key] = encodeIds(next) }
+        return next.contains(track.id)
+    }
+
+    /** 当前音源的收藏 id 集合（供「我的收藏」列表读取）。 */
+    fun currentFavorites(): Set<String> = when (sourceMode.value) {
+        SourceMode.FNOS -> favFnos.value
+        SourceMode.LOCAL -> favLocal.value
+        SourceMode.WEBDAV -> favWebDav.value
+    }
+
+    /** 保存本地扫描结果并持久化。 */
+    suspend fun setLocalLibrary(tracks: List<Track>) {
+        localLibrary.value = tracks
+        dataStore.edit { it[LOCAL_LIBRARY] = encodeTracks(tracks) }
+    }
+
+    // ---- 收藏 / 本地库 JSON 编解码 ----
+
+    private fun encodeIds(ids: Set<String>): String =
+        org.json.JSONArray(ids.toList()).toString()
+
+    private fun decodeIds(raw: String): Set<String> = runCatching {
+        val arr = org.json.JSONArray(raw)
+        (0 until arr.length()).map { arr.getString(it) }.toSet()
+    }.getOrDefault(emptySet())
+
+    private fun encodeTracks(tracks: List<Track>): String {
+        val arr = org.json.JSONArray()
+        tracks.forEach { t ->
+            arr.put(org.json.JSONObject().apply {
+                put("id", t.id); put("title", t.title); put("artist", t.artist)
+                put("album", t.album); put("durationMs", t.durationMs)
+                put("coverUrl", t.coverUrl); put("streamUrl", t.streamUrl)
+                put("source", t.source.name); put("embeddedAudioUrl", t.embeddedAudioUrl)
+                put("folder", t.folder); put("sampleRateHz", t.sampleRateHz)
+                put("bitDepth", t.bitDepth); put("codec", t.codec)
+            })
+        }
+        return arr.toString()
+    }
+
+    private fun decodeTracks(raw: String): List<Track> {
+        val arr = org.json.JSONArray(raw)
+        return (0 until arr.length()).mapNotNull { i ->
+            runCatching {
+                val o = arr.getJSONObject(i)
+                Track(
+                    id = o.getString("id"),
+                    title = o.optString("title"),
+                    artist = o.optString("artist"),
+                    album = o.optString("album"),
+                    durationMs = o.optLong("durationMs"),
+                    coverUrl = o.optString("coverUrl").ifBlank { null },
+                    streamUrl = o.getString("streamUrl"),
+                    source = runCatching {
+                        com.musicbox.nas.data.SourceType.valueOf(o.optString("source"))
+                    }.getOrDefault(com.musicbox.nas.data.SourceType.LOCAL),
+                    embeddedAudioUrl = o.optString("embeddedAudioUrl").ifBlank { null },
+                    folder = o.optString("folder"),
+                    sampleRateHz = o.optInt("sampleRateHz"),
+                    bitDepth = o.optInt("bitDepth"),
+                    codec = o.optString("codec")
+                )
+            }.getOrNull()
+        }
+    }
+
     // ---- 设置 JSON 导出 / 导入 ----
 
     /**
@@ -681,6 +789,10 @@ class MusicBoxApp : Application() {
             put("debug_mode", debugMode.value)
             put("show_descriptions", showDescriptions.value)
             put("haptic_strength", hapticStrength.value)
+            put("favorites_webdav", encodeIds(favWebDav.value))
+            put("favorites_fnos", encodeIds(favFnos.value))
+            put("favorites_local", encodeIds(favLocal.value))
+            put("local_library", encodeTracks(localLibrary.value))
             put("scan_pace_ms", scanPaceMs.value)
             put("scan_concurrency", scanConcurrency.value)
             put("webdav", JSONObject().apply {
@@ -732,6 +844,10 @@ class MusicBoxApp : Application() {
         if (o.has("debug_mode")) setDebugMode(o.optBoolean("debug_mode"))
         if (o.has("show_descriptions")) setShowDescriptions(o.optBoolean("show_descriptions"))
         if (o.has("haptic_strength")) setHapticStrength(o.optInt("haptic_strength"))
+        if (o.has("favorites_webdav")) { favWebDav.value = decodeIds(o.optString("favorites_webdav")); dataStore.edit { it[FAV_WEBDAV] = encodeIds(favWebDav.value) } }
+        if (o.has("favorites_fnos")) { favFnos.value = decodeIds(o.optString("favorites_fnos")); dataStore.edit { it[FAV_FNOS] = encodeIds(favFnos.value) } }
+        if (o.has("favorites_local")) { favLocal.value = decodeIds(o.optString("favorites_local")); dataStore.edit { it[FAV_LOCAL] = encodeIds(favLocal.value) } }
+        if (o.has("local_library")) runCatching { setLocalLibrary(decodeTracks(o.optString("local_library"))) }
         if (o.has("scan_pace_ms")) scanPaceMs.value = o.optLong("scan_pace_ms").coerceIn(0L, 2000L)
         if (o.has("scan_concurrency")) scanConcurrency.value = o.optInt("scan_concurrency").coerceIn(1, 48)
         // WebDAV
@@ -811,3 +927,9 @@ private val P_VOLUME = floatPreferencesKey("wheel_volume")
 private val D_DEBUG = booleanPreferencesKey("debug_mode")
 private val T_SHOW_DESC = booleanPreferencesKey("show_descriptions")
 private val T_HAPTIC = intPreferencesKey("haptic_strength")
+/** 收藏三表：按音源分表，存 Track.id 的 JSON 数组字符串。 */
+private val FAV_WEBDAV = stringPreferencesKey("favorites_webdav")
+private val FAV_FNOS = stringPreferencesKey("favorites_fnos")
+private val FAV_LOCAL = stringPreferencesKey("favorites_local")
+/** 本地音乐曲库：扫描结果 JSON。 */
+private val LOCAL_LIBRARY = stringPreferencesKey("local_library")

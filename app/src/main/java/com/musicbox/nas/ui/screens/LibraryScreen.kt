@@ -106,6 +106,7 @@ fun LibraryScreen(navController: NavController) {
         when (mode) {
             SourceMode.WEBDAV -> WebDavSection(navController)
             SourceMode.FNOS -> FnOSSection(navController)
+            SourceMode.LOCAL -> LocalSection(navController)
         }
     }
 }
@@ -274,6 +275,60 @@ internal fun buildDavData(lib: DavLibrary): SourceBrowserData {
         // 只有异常才在顶部提示（认证失败 / 截断 / 限流）；正常完成不常驻展示统计数字
         status = lib.note ?: "",
         playlistHint = "已自动识别 WebDAV 目录中的 .m3u / .m3u8 歌单（共 ${lib.playlists.size} 个），点击即可查看歌曲"
+    )
+}
+
+/** 本地音乐曲库：扫描本机文件夹得到，按专辑 / 歌手 / 文件夹分组，纯本地无需网络。 */
+internal fun buildLocalData(tracks: List<Track>): SourceBrowserData {
+    fun albumEntry(name: String, list: List<Track>) = SourceEntry(
+        id = "local-album-$name",
+        name = name.ifBlank { "未知专辑" },
+        subtitle = "${list.firstOrNull()?.artist.orEmpty().ifBlank { "未知歌手" }} · ${list.size} 首",
+        coverUrl = list.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl,
+        embeddedAudioUrl = firstEmbedded(list),
+        tracks = list
+    )
+    val albums by lazy {
+        tracks.groupBy { it.album.ifBlank { "未知专辑" } }
+            .map { (name, list) -> albumEntry(name, list) }
+    }
+    val artists by lazy {
+        tracks.groupBy { it.artist.ifBlank { "未知歌手" } }.map { (name, list) ->
+            SourceEntry(
+                id = "local-artist-$name",
+                name = name,
+                subtitle = "${list.map { it.album }.distinct().size} 张专辑 · ${list.size} 首",
+                coverUrl = list.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl,
+                embeddedAudioUrl = firstEmbedded(list),
+                albums = list.groupBy { it.album.ifBlank { "未知专辑" } }
+                    .map { (an, al) -> albumEntry(an, al) }
+            )
+        }
+    }
+    val folderCache = HashMap<String?, Pair<List<String>, List<Track>>>()
+    val rootPrefix = folderRootPrefix(tracks)
+    return SourceBrowserData(
+        sourceLabel = "本地音乐",
+        loadSongs = { page -> if (page <= 1) tracks to tracks.size else emptyList<Track>() to tracks.size },
+        loadAlbums = { albums },
+        loadArtists = { artists },
+        loadPlaylists = { emptyList() },
+        loadAlbumTracks = { e -> e.tracks },
+        loadArtistAlbums = { e -> e.albums },
+        loadPlaylistTracks = { e -> e.tracks },
+        loadFolders = { parent -> folderCache.getOrPut(parent) { foldersOf(tracks, parent, rootPrefix) } },
+        supportsFolders = true,
+        supportsGenres = false,
+        loadRoam = { tracks.shuffled().take(60) },
+        supportsRoam = true,
+        search = { q ->
+            if (q.isBlank()) emptyList()
+            else tracks.filter {
+                it.title.contains(q, true) || it.artist.contains(q, true) || it.album.contains(q, true)
+            }
+        },
+        status = tracks.size.let { if (it > 0) "本地音乐 · $it 首" else "" },
+        playlistHint = ""
     )
 }
 
@@ -1517,6 +1572,35 @@ private fun UnifiedTrackList(
 }
 
 // ==================== 音源入口（只浏览，不编辑连接） ====================
+
+@Composable
+private fun LocalSection(navController: NavController) {
+    val app = MusicBoxApp.instance
+    val tracks by app.localLibrary.collectAsState()
+    if (tracks.isEmpty()) {
+        Column(
+            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("尚未收录本地音乐", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "到「设置 → 扫描本地音乐」选择一个音乐文件夹",
+                color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 32.dp)
+            )
+        }
+        return
+    }
+    val data = remember(tracks) { buildLocalData(tracks) }
+    WheelHome(
+        data = data,
+        navController = navController,
+        memoryKey = "local",
+        statusLine = data.status
+    )
+}
 
 @Composable
 private fun WebDavSection(navController: NavController) {

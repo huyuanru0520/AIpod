@@ -73,6 +73,8 @@ fun ClickWheel(
     dark: Boolean = true,
     onRotate: (Int) -> Unit,
     onPlayPause: () -> Unit,
+    /** 底部播放键长按：播放页用它进入歌曲详情；不传则沿用播放/暂停。 */
+    onPlayLongPress: () -> Unit = {},
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onRewind: () -> Unit,
@@ -93,6 +95,7 @@ fun ClickWheel(
     // 下面统一用 xxx.value()，每次重组都能拿到页面最新派发的回调。
     val onRotateRef = rememberUpdatedState(onRotate)
     val onPlayPauseRef = rememberUpdatedState(onPlayPause)
+    val onPlayLongPressRef = rememberUpdatedState(onPlayLongPress)
     val onPreviousRef = rememberUpdatedState(onPrevious)
     val onNextRef = rememberUpdatedState(onNext)
     val onRewindRef = rememberUpdatedState(onRewind)
@@ -215,6 +218,15 @@ fun ClickWheel(
                                         longFired = true
                                         Haptics.click(context, view)
                                         onCenterLongPressRef.value()
+                                    }
+                                }
+                                WheelZone.BOTTOM -> {
+                                    // 播放键长按：只触发一次（进歌曲详情），不循环
+                                    longJob = scope.launch {
+                                        delay(LONG_PRESS_MS)
+                                        longFired = true
+                                        Haptics.click(context, view)
+                                        onPlayLongPressRef.value()
                                     }
                                 }
                                 else -> Unit
