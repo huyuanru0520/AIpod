@@ -101,7 +101,6 @@ import com.musicbox.nas.data.Track
 import com.musicbox.nas.player.PlayerController
 import com.musicbox.nas.ui.components.BareCover
 import com.musicbox.nas.ui.components.ClickWheel
-import com.musicbox.nas.ui.components.WheelMode
 import com.musicbox.nas.ui.components.CoverImage
 import com.musicbox.nas.ui.components.HiResBadge
 import com.musicbox.nas.ui.components.rememberCoverBitmap
@@ -140,13 +139,7 @@ fun PlayerScreen(navController: NavController) {
     var showQueue by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val volume by MusicBoxApp.instance.volume.collectAsState()
-    // 进度模式下不订阅 position（避免整页每 500ms 重组）：暂停瞬间取一次快照，
-    // 之后转轮每格自己推进快照并 seek，界面跟手更新。
-    var progressSnapshot by remember { mutableLongStateOf(PlayerController.currentPositionMs()) }
     var volumeHint by remember { mutableStateOf(false) }
-    LaunchedEffect(isPlaying) {
-        if (!isPlaying) progressSnapshot = PlayerController.currentPositionMs()
-    }
     LaunchedEffect(volumeHint) {
         if (volumeHint) {
             kotlinx.coroutines.delay(1400L)
@@ -184,16 +177,12 @@ fun PlayerScreen(navController: NavController) {
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {
             val wheel = minOf(maxWidth * 0.64f, maxHeight * 0.40f, 286.dp)
             var showLyrics by remember { mutableStateOf(false) }
-            // 播放时转轮调音量；按下「下」键暂停后，中间切到大进度条，转轮改为调进度
-            val wheelMode = if (isPlaying) WheelMode.VOLUME else WheelMode.PROGRESS
-            val body = when {
-                wheelMode == WheelMode.PROGRESS -> "progress"
-                showLyrics -> "lyrics"
-                else -> "cover"
-            }
+            // iPod 原生：播放页转轮只调音量，进度靠长按左右键快退 / 快进
+            val body = if (showLyrics) "lyrics" else "cover"
+            // 长按快退/快进：直接读播放器当前位置，不订阅 position，避免整页每 500ms 重组
             fun seekBy(deltaMs: Long) {
-                val next = (progressSnapshot + deltaMs).coerceIn(0L, duration.coerceAtLeast(0L))
-                progressSnapshot = next
+                val base = PlayerController.currentPositionMs()
+                val next = (base + deltaMs).coerceIn(0L, duration.coerceAtLeast(0L))
                 PlayerController.seekTo(next)
             }
 
@@ -241,10 +230,6 @@ fun PlayerScreen(navController: NavController) {
                             label = "ipodBody"
                         ) { view ->
                             when (view) {
-                                "progress" -> WheelProgressPanel(
-                                    positionMs = progressSnapshot,
-                                    durationMs = duration
-                                )
                                 "lyrics" -> Box(Modifier.fillMaxSize()) {
                                     LyricsView(
                                         current = c,
@@ -273,7 +258,7 @@ fun PlayerScreen(navController: NavController) {
                     }
 
                     // 转动音量时给一个短暂反馈，松手 1.4 秒后淡出
-                    if (wheelMode == WheelMode.VOLUME && volumeHint) {
+                    if (volumeHint) {
                         Row(
                             Modifier
                                 .align(Alignment.CenterHorizontally)
@@ -291,42 +276,32 @@ fun PlayerScreen(navController: NavController) {
                         }
                     }
 
-                    // 进度模式下大进度条已经占用中间区，这里不再重复绘制细进度条
-                    if (wheelMode == WheelMode.VOLUME) {
-                        Column(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
-                            SeekBar(
-                                duration = duration,
-                                inactiveColor = Color.White.copy(alpha = 0.22f),
-                                labelColor = Color.White.copy(alpha = 0.6f),
-                                onSeek = { PlayerController.seekTo(it) }
-                            )
-                        }
-                    } else {
-                        Spacer(Modifier.height(24.dp))
+                    // 细进度条始终在：拖动它也能直接跳进度，与转轮的音量职责分开
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
+                        SeekBar(
+                            duration = duration,
+                            inactiveColor = Color.White.copy(alpha = 0.22f),
+                            labelColor = Color.White.copy(alpha = 0.6f),
+                            onSeek = { PlayerController.seekTo(it) }
+                        )
                     }
                     Spacer(Modifier.height(2.dp))
 
                     ClickWheel(
                         diameter = wheel,
-                        mode = wheelMode,
                         isPlaying = isPlaying,
                         onRotate = { steps ->
-                            if (wheelMode == WheelMode.VOLUME) {
-                                val next = MusicBoxApp.instance.volume.value + steps * 0.04f
-                                volumeHint = true
-                                scope.launch { MusicBoxApp.instance.setVolume(next) }
-                            } else {
-                                seekBy(steps * 5000L)
-                            }
+                            val next = MusicBoxApp.instance.volume.value + steps * 0.04f
+                            volumeHint = true
+                            scope.launch { MusicBoxApp.instance.setVolume(next) }
                         },
                         onPlayPause = { if (isPlaying) PlayerController.pause() else PlayerController.play() },
-                        onPrevious = {
-                            if (wheelMode == WheelMode.VOLUME) PlayerController.previous() else seekBy(-10_000L)
-                        },
-                        onNext = {
-                            if (wheelMode == WheelMode.VOLUME) PlayerController.next() else seekBy(10_000L)
-                        },
+                        onPrevious = { PlayerController.previous() },
+                        onNext = { PlayerController.next() },
+                        onRewind = { seekBy(-5_000L) },
+                        onForward = { seekBy(5_000L) },
                         onMenu = { navController.popBackStack() },
+                        onMenuHome = { navController.popBackStack("library", false) },
                         onConfirm = { showQueue = true },
                         modifier = Modifier.align(Alignment.CenterHorizontally)
                     )
@@ -446,63 +421,6 @@ private fun IpodTopBar(
                 )
             }
         }
-    }
-}
-
-/**
- * 暂停后的「进度模式」：中间区从封面切成大进度条，转轮每格前进/后退 5 秒。
- * 这里刻意不订阅 position，位置由页面里的 progressSnapshot 推着走。
- */
-@Composable
-private fun WheelProgressPanel(positionMs: Long, durationMs: Long) {
-    val progress = if (durationMs > 0L) {
-        (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-    } else 0f
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(horizontal = 30.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            "进度调整 · 转动转轮",
-            style = MaterialTheme.typography.labelMedium,
-            color = Color.White.copy(alpha = 0.55f)
-        )
-        Spacer(Modifier.height(14.dp))
-        Text(
-            formatDuration(positionMs),
-            style = MaterialTheme.typography.headlineLarge,
-            color = Color.White
-        )
-        Spacer(Modifier.height(12.dp))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(Color.White.copy(alpha = 0.18f))
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth(progress)
-                    .fillMaxHeight()
-                    .background(Color(0xFFFA2D48))
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("0:00", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f))
-            Text(formatDuration(durationMs), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f))
-        }
-        Spacer(Modifier.height(18.dp))
-        Text(
-            "左键倒退 10 秒 · 右键快进 10 秒 · 下键返回播放",
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White.copy(alpha = 0.45f),
-            textAlign = TextAlign.Center
-        )
     }
 }
 

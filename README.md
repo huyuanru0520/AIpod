@@ -10,7 +10,7 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.24-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material3-4285F4?logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![Media3](https://img.shields.io/badge/Media3-1.5.1-FF6F00)](https://developer.android.com/media/media3)
-[![Version](https://img.shields.io/badge/version-2.0.2-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.0.3-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 </div>
@@ -36,7 +36,7 @@ Matrix Music 不建索引库、不依赖服务端插件，直接用 WebDAV 协�
 | **软解兜底** | 内置 FFmpeg 扩展（4 ABI），MediaCodec 不支持的无损格式自动降级软解 |
 | **封面** | 优先用同目录的 cover 图（`cover.jpg` / `folder.png` / `front.webp` 等，省流量），目录没有才从音频文件内嵌标签提取（FLAC PICTURE / VorbisComment base64 / ID3 APIC / MP4 `covr`）；通知栏同步显示 |
 | **歌词** | 优先读 metadata 内嵌（FLAC `LYRICS`、ID3 `USLT`、MP4 `©lyr`），没有才回退同目录同名 `.lrc`；播放时当前句恒定居中 |
-| **播放页** | **深色液态玻璃 iPod 转轮**：上 MENU / 左上一首 / 右下一首 / 下播放暂停 / 中心确认；转动带 36 格刻度与震动。播放时转轮调音量，暂停后切大进度条、转轮调进度 |
+| **播放页** | **透明玻璃 iPod 点击轮**：转轮转动调音量（每格震动模拟刻度，无可见刻度线）；短按左右切歌、长按快退快进；上 MENU 返回（长按回曲库）、下播放暂停、中心确认打开队列 |
 | **交互** | CoverFlow 横屏浏览、当前播放卡片从底部升起、全量手势返回、列表返回保留原滚动位置 |
 | **音质** | 原采样率直通，或本地转 256kbps AAC 缓存（省流量、兼容老设备） |
 | **外观** | iOS 26 风格液态玻璃外壳（悬浮 Dock + 玻璃迷你播放器），内部仍是 Material 3；10 种主题色可选，深浅色分别推导 |
