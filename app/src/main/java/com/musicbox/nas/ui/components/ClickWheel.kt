@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,6 +50,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
+import kotlin.math.roundToInt
 
 /**
  * 透明玻璃 iPod 点击轮。
@@ -80,11 +82,27 @@ fun ClickWheel(
     onConfirm: () -> Unit,
     /** 中心键长按：播放页用它切换歌词界面；不传则无行为。 */
     onCenterLongPress: () -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 主界面列表滚动启用 iPod 式加速度：慢转细腻、快转加速；搜索字母盘等场景应关闭。 */
+    accelerated: Boolean = false
 ) {
     val context = LocalContext.current
     val view = LocalView.current
     val scope = rememberCoroutineScope()
+    // ★ 手势回调必须用 rememberUpdatedState 保鲜：pointerInput(Unit) 的 key 固定，
+    // 手势 lambda 只在首次组合创建一次，若直接捕获 onRotate / onConfirm，会永远停在
+    // 第一次组合时的旧回调（其中 node 是 Root），导致进入搜索页后字母盘不跟随滚轮。
+    // 下面统一用 xxx.value()，每次重组都能拿到页面最新派发的回调。
+    val onRotateRef = rememberUpdatedState(onRotate)
+    val onPlayPauseRef = rememberUpdatedState(onPlayPause)
+    val onPreviousRef = rememberUpdatedState(onPrevious)
+    val onNextRef = rememberUpdatedState(onNext)
+    val onRewindRef = rememberUpdatedState(onRewind)
+    val onForwardRef = rememberUpdatedState(onForward)
+    val onMenuRef = rememberUpdatedState(onMenu)
+    val onMenuHomeRef = rememberUpdatedState(onMenuHome)
+    val onConfirmRef = rememberUpdatedState(onConfirm)
+    val onCenterLongPressRef = rememberUpdatedState(onCenterLongPress)
     var longFired by remember { mutableStateOf(false) }
     var centerDown by remember { mutableStateOf(false) }
     var bottomDown by remember { mutableStateOf(false) }
@@ -129,6 +147,9 @@ fun ClickWheel(
                     var accum = 0f
                     var lastTickAt = 0L
                     var onRing = false
+                    // 加速度状态：连续快速转动时逐步提速，停手后回落到 1 格/项。
+                    var velSteps = 1
+                    var lastRotateAt = 0L
                     detectDragGestures(
                         onDragStart = { p ->
                             val c = Offset(size.width / 2f, size.height / 2f)
@@ -137,6 +158,8 @@ fun ClickWheel(
                             onRing = r > radius * 0.38f && r <= radius * 1.04f
                             lastAngle = angleOf(p, c)
                             accum = 0f
+                            velSteps = 1
+                            lastRotateAt = 0L
                         },
                         onDragEnd = { onRing = false },
                         onDragCancel = { onRing = false }
@@ -162,7 +185,19 @@ fun ClickWheel(
                                 lastTickAt = now
                                 Haptics.tick(context, view)
                             }
-                            onRotate(if (forward) 1 else -1)
+                            // iPod 式加速度：转得越快（相邻两格间隔越短），一次跨过的项越多；
+                            // 慢转或停顿后回到 1 格/项，默认手感细腻而不再是匀速飞奔。
+                            val steps = if (accelerated) {
+                                val dt = if (lastRotateAt == 0L) 1000L else now - lastRotateAt
+                                lastRotateAt = now
+                                velSteps = when {
+                                    dt <= 28L -> (velSteps + 1).coerceAtMost(MAX_VELOCITY_STEPS)
+                                    dt <= 60L -> velSteps
+                                    else -> 1
+                                }
+                                velSteps
+                            } else 1
+                            onRotateRef.value(if (forward) steps else -steps)
                         }
                     }
                 }
@@ -182,9 +217,9 @@ fun ClickWheel(
                                         Haptics.click(context, view) // 长按只震一次，之后连续动作不再震
                                         while (isActive) {
                                             when (zone) {
-                                                WheelZone.LEFT -> onRewind()
-                                                WheelZone.RIGHT -> onForward()
-                                                WheelZone.TOP -> onMenuHome()
+                                                WheelZone.LEFT -> onRewindRef.value()
+                                                WheelZone.RIGHT -> onForwardRef.value()
+                                                WheelZone.TOP -> onMenuHomeRef.value()
                                                 else -> Unit
                                             }
                                             delay(REPEAT_MS)
@@ -197,7 +232,7 @@ fun ClickWheel(
                                         delay(LONG_PRESS_MS)
                                         longFired = true
                                         Haptics.click(context, view)
-                                        onCenterLongPress()
+                                        onCenterLongPressRef.value()
                                     }
                                 }
                                 else -> Unit
@@ -214,11 +249,11 @@ fun ClickWheel(
                             }
                             Haptics.click(context, view)
                             when (hitZone(p, size)) {
-                                WheelZone.TOP -> onMenu()
-                                WheelZone.LEFT -> onPrevious()
-                                WheelZone.RIGHT -> onNext()
-                                WheelZone.BOTTOM -> onPlayPause()
-                                WheelZone.CENTER -> onConfirm()
+                                WheelZone.TOP -> onMenuRef.value()
+                                WheelZone.LEFT -> onPreviousRef.value()
+                                WheelZone.RIGHT -> onNextRef.value()
+                                WheelZone.BOTTOM -> onPlayPauseRef.value()
+                                WheelZone.CENTER -> onConfirmRef.value()
                                 WheelZone.NONE -> Unit
                             }
                         }
@@ -340,6 +375,8 @@ private fun hitZone(p: Offset, size: IntSize): WheelZone {
 /** 12° 一格：30 格一圈，震动像细密的滚花，而不是粗颗粒的咔哒。 */
 private const val STEP_DEGREES = 12f
 private const val MIN_TICK_INTERVAL_MS = 60L
+/** 加速度：连续快速转动时，单格最多跨过的项数（iPod 式越转越快）。 */
+private const val MAX_VELOCITY_STEPS = 6
 private const val LONG_PRESS_MS = 420L
 private const val REPEAT_MS = 240L
 

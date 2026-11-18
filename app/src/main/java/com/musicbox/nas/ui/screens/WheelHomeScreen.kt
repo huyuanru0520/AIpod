@@ -467,7 +467,9 @@ internal fun WheelHome(
                     onForward = { PlayerController.seekTo(PlayerController.currentPositionMs() + 5_000L) },
                     onMenu = { onWheelMenu() },
                     onMenuHome = { home() },
-                    onConfirm = { onWheelConfirm() }
+                    onConfirm = { onWheelConfirm() },
+                    // 列表滚动启用 iPod 式加速度；搜索字母盘需要逐字精确选择，关闭加速度。
+                    accelerated = !(node is WheelNode.Search && searchPhase == 0)
                 )
             }
         }
@@ -705,13 +707,6 @@ private fun WheelList(
                             style = if (sel) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyLarge,
                             fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
                             color = fg,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            item.subtitle(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = fg.copy(alpha = 0.55f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )

@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SaveAs
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.CircularProgressIndicator
@@ -134,6 +135,8 @@ fun WheelSettingsScreen(navController: NavController) {
     var transcodeSize by remember { mutableStateOf(AacTranscoder.cacheSize()) }
     var coverCacheSize by remember { mutableStateOf(coverCacheSizeBytes()) }
     var showLogs by remember { mutableStateOf(false) }
+    // 日志导出：下载目录里日志文件的真实路径、大小与写入通道结果
+    var logInfo by remember { mutableStateOf(runCatching { CrashLogger.logFileInfo() }.getOrDefault("")) }
 
     val node = stack.last()
 
@@ -172,6 +175,25 @@ fun WheelSettingsScreen(navController: NavController) {
             statusLine = res
         }
     }
+    // 日志另存：用系统文件选择器自选位置写出完整日志（滚轮页无触摸，由转轮选中后触发）
+    val logSaveLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                CrashLogger.flushNow()
+                runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use {
+                        it.write(CrashLogger.fullText().toByteArray(Charsets.UTF_8))
+                    }
+                    true
+                }.getOrDefault(false)
+            }
+            statusLine = if (ok) "日志已另存" else "日志另存失败"
+            logInfo = withContext(Dispatchers.IO) { runCatching { CrashLogger.logFileInfo() }.getOrDefault("") }
+        }
+    }
 
     // 构建当前页条目
     val items: List<SettingItem> = when (node) {
@@ -180,7 +202,7 @@ fun WheelSettingsScreen(navController: NavController) {
             webDav, fnos, webDavScanning, coverCacheSize, transcodeSize
         )
         SettingsNode.Tabs -> buildTabsSettings(visibleTabs)
-        SettingsNode.Logs -> buildLogsSettings(debugMode)
+        SettingsNode.Logs -> buildLogsSettings(debugMode, logInfo)
         SettingsNode.About -> buildAboutSettings()
         SettingsNode.WebDavForm, SettingsNode.FnosForm -> emptyList()
     }
@@ -276,6 +298,12 @@ fun WheelSettingsScreen(navController: NavController) {
                         }
                         statusLine = "日志已刷新并复制"
                     }
+                }
+                "savelog" -> logSaveLauncher.launch("NASMusic_log.txt")
+                "clearlog" -> scope.launch {
+                    withContext(Dispatchers.IO) { CrashLogger.clear() }
+                    logInfo = withContext(Dispatchers.IO) { runCatching { CrashLogger.logFileInfo() }.getOrDefault("") }
+                    statusLine = "日志已清空"
                 }
                 "logdetails" -> showLogs = !showLogs
                 "back" -> navController.popBackStack()
@@ -471,10 +499,13 @@ private fun buildTabsSettings(visible: List<String>): List<SettingItem> {
     }
 }
 
-private fun buildLogsSettings(debug: Boolean): List<SettingItem> {
+private fun buildLogsSettings(debug: Boolean, logInfo: String): List<SettingItem> {
     val out = mutableListOf<SettingItem>()
     out += SettingItem.Action("copylog", "刷新并复制日志", "复制到剪贴板", Icons.Default.Description)
+    out += SettingItem.Action("savelog", "另存日志文件", "保存为 txt 文件", Icons.Default.SaveAs)
     out += SettingItem.Action("logdetails", "展开 / 收起日志内容", "查看最近日志", Icons.Default.Description)
+    out += SettingItem.Action("clearlog", "清空日志", "清除全部记录", Icons.Default.Delete)
+    out += SettingItem.Info("日志位置", logInfo)
     if (!debug) out += SettingItem.Info("提示", "调试模式关闭时不生成运行日志；崩溃日志仍会保留。")
     return out
 }
