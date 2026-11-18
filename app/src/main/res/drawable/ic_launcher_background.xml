@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 图标背景透明：只显示前景的 iPod 转轮，不铺任何底色。 -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
-    <solid android:color="@android:color/transparent" />
-</shape>
+<!-- 虚化红底：径向渐变，中心暖红向外过渡到深红，模拟封面高斯虚化后的红色光晕。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M0,0 L108,0 L108,108 L0,108 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="46"
+                android:centerY="44"
+                android:gradientRadius="104"
+                android:startColor="#FFF0565F"
+                android:centerColor="#FFD23448"
+                android:endColor="#FF691222" />
+        </aapt:attr>
+    </path>
+</vector>

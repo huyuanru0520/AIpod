@@ -1551,9 +1551,10 @@ private fun WebDavSection(navController: NavController) {
         app.startWebDavScan(c)
     }
     val lib = library
-    // 扫描中（含重新扫描、初始自动扫描）始终展示实时找到的音乐；
-    // 未连接数据且空闲时，也由 ScanLiveView 统一给出空态 / 错误 / 重新扫描入口。
-    if (lib == null || scanning) {
+    // 扫描在 App 级作用域后台进行：只要有缓存曲库，就始终展示可正常操作的滚轮主界面，
+    // 仅在列表底部叠加一条细进度条提示「后台扫描中」，不再整屏切换到扫描视图挡住操作。
+    // 只有首次连接、尚无任何缓存数据时，才用 ScanLiveView 给出空态 / 实时列表 / 错误入口。
+    if (lib == null) {
         ScanLiveView(
             progress = progress,
             scanning = scanning,
@@ -1568,7 +1569,9 @@ private fun WebDavSection(navController: NavController) {
             data = data,
             navController = navController,
             memoryKey = "webdav",
-            statusLine = data.status
+            statusLine = data.status,
+            scanning = scanning,
+            scanProgress = progress
         )
     }
 }

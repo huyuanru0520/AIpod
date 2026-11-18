@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -100,7 +101,10 @@ internal fun WheelHome(
     data: SourceBrowserData,
     navController: NavController,
     memoryKey: String,
-    statusLine: String? = null
+    statusLine: String? = null,
+    // 后台扫描状态：有缓存曲库时界面照常可操作，只在列表底部叠加一条细进度条。
+    scanning: Boolean = false,
+    scanProgress: String = ""
 ) {
     val isLandscape =
         LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -400,6 +404,34 @@ internal fun WheelHome(
                             items = items,
                             selected = selected,
                             immersive = false
+                        )
+                    }
+                }
+
+                // 后台扫描中：在列表底部叠加一条细进度条，仅提示进度、不遮挡滚轮操作。
+                if (scanning) {
+                    Column(
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .padding(bottom = 4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            if (scanProgress.isNotBlank()) scanProgress else "后台扫描中…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.75f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        LinearProgressIndicator(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(3.dp)
+                                .clip(RoundedCornerShape(2.dp)),
+                            color = Color.White,
+                            trackColor = Color.White.copy(alpha = 0.22f)
                         )
                     }
                 }
