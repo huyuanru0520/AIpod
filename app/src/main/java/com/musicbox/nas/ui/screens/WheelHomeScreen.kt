@@ -733,20 +733,30 @@ private fun ClickCoverFlow(
             runCatching { rowState.scrollToItem(target, 0) }
         }
     }
-    // 居中项完全由当前滚动位置派生（含滚动偏移），实时驱动 3D 效果；
-    // 滑动停止时只把结果回报给上层选中态，不做任何反向 scroll —— 这是消除回弹的关键。
-    val centered by remember {
-        derivedStateOf {
-            if (items.isEmpty()) 0 else {
-                val first = rowState.firstVisibleItemIndex
-                val off = rowState.firstVisibleItemScrollOffset
-                val approx = (off / 220f).roundToInt().coerceIn(0, 1)
-                (first + approx).coerceIn(0, items.lastIndex)
-            }
+
+    // ============ 流畅度优化（消除滑动卡顿）============
+    // 卡顿根因：旧实现用 derivedStateOf 依赖 firstVisibleItemScrollOffset 派生 centered，
+    // 滑动每一帧 centered 都可能变 → LaunchedEffect(centered) 每帧 onSelected →
+    // 顶层 selected 更新 → 整个 WheelHome（含 WheelBackdrop 的全屏 32/40dp 模糊、
+    // 所有 CoverImage）跟着重组重绘，于是明显掉帧。
+    //
+    // 新实现：
+    //  1) 3D 变换（rotation/scale/alpha）全部在 graphicsLayer{} 内直接读 rowState.layoutInfo
+    //     实时计算——这是快照读取，只更新渲染图层，不触发组合重组；
+    //  2) 只有当滚动「停止」（isScrollInProgress 由 true→false）时才计算一次居中项并
+    //     上报 onSelected，顶层的 selected 在滑动过程中完全不动，背景模糊不再反复重算；
+    //  3) 文字高亮用一个低频的 settledCentered（仅停下时更新），避免每帧重组文本。
+    val scrolling by remember { derivedStateOf { rowState.isScrollInProgress } }
+    var settledCentered by remember(items) { mutableStateOf(0) }
+    LaunchedEffect(scrolling, items) {
+        if (!scrolling && items.isNotEmpty()) {
+            val info = rowState.layoutInfo
+            val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+            val c = info.visibleItemsInfo
+                .minByOrNull { abs(it.offset + it.size / 2f - center) }?.index ?: 0
+            settledCentered = c
+            if (c != selected) onSelected(c)
         }
-    }
-    LaunchedEffect(centered) {
-        if (centered != selected) onSelected(centered)
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val card = minOf(maxHeight * 0.55f, maxWidth * 0.20f)
@@ -759,15 +769,28 @@ private fun ClickCoverFlow(
             ),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            itemsIndexed(items) { i, item ->
-                val d = (i - centered).toFloat()
-                val norm = (d / 1.6f).coerceIn(-1f, 1f)
-                val sel = i == centered
+            itemsIndexed(items, key = { i, item ->
+                when (item) {
+                    is WheelItem.Op -> "op-${item.node}-$i"
+                    is WheelItem.Track -> "track-${item.index}-$i"
+                    is WheelItem.Action -> "action-${item.key}-$i"
+                }
+            }) { i, item ->
+                // 文字高亮只在滚动停下后更新（settledCentered），滑动过程中不重组文本。
+                val sel = i == settledCentered
                 Column(
                     Modifier
                         .width(itemW)
                         .fillMaxHeight()
                         .graphicsLayer {
+                            // 直接读滚动布局快照实时算 3D：只动图层，不重组。
+                            val info = rowState.layoutInfo
+                            val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+                            val vi = info.visibleItemsInfo.firstOrNull { it.index == i }
+                            val norm = if (vi != null) {
+                                val d = (vi.offset + vi.size / 2f - center) / (itemW.toPx() * 1.6f)
+                                d.coerceIn(-1f, 1f)
+                            } else 0f
                             rotationY = -norm * 42f
                             val s = 1f - abs(norm) * 0.28f
                             scaleX = s
@@ -779,7 +802,15 @@ private fun ClickCoverFlow(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
                         ) {
-                            if (i != centered) onSelected(i)
+                            // 点击时用实时布局判断被点的项是否居中，不依赖顶层 state
+                            val info = rowState.layoutInfo
+                            val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+                            val c = info.visibleItemsInfo
+                                .minByOrNull { abs(it.offset + it.size / 2f - center) }?.index ?: i
+                            if (i != c) {
+                                settledCentered = i
+                                onSelected(i)
+                            }
                             onClick(item)
                         },
                     horizontalAlignment = Alignment.CenterHorizontally,

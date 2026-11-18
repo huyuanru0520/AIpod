@@ -36,7 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ColorLens
+import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ImportExport
@@ -44,7 +44,6 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
@@ -70,7 +69,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -84,7 +82,6 @@ import com.musicbox.nas.LibraryTabs
 import com.musicbox.nas.MusicBoxApp
 import com.musicbox.nas.ScanPace
 import com.musicbox.nas.SourceMode
-import com.musicbox.nas.ThemeMode
 import com.musicbox.nas.player.AacTranscoder
 import com.musicbox.nas.player.PlayerController
 import com.musicbox.nas.ui.components.ClickWheel
@@ -93,7 +90,6 @@ import com.musicbox.nas.ui.components.coverCacheSizeBytes
 import com.musicbox.nas.ui.components.fadeInList
 import com.musicbox.nas.ui.components.glassHighlight
 import com.musicbox.nas.ui.components.rememberCoverBitmap
-import com.musicbox.nas.ui.theme.AccentPresets
 import com.musicbox.nas.ui.theme.BrandRed
 import com.musicbox.nas.util.CrashLogger
 import kotlinx.coroutines.Dispatchers
@@ -114,14 +110,13 @@ fun WheelSettingsScreen(navController: NavController) {
     val scope = rememberCoroutineScope()
 
     // 所有设置状态
-    val themeMode by app.themeMode.collectAsState()
     val sourceMode by app.sourceMode.collectAsState()
-    val accentArgb by app.accentColor.collectAsState()
     val audioQuality by app.audioQuality.collectAsState()
     val scanPace by app.scanPaceMs.collectAsState()
     val visibleTabs by app.visibleTabs.collectAsState()
     val debugMode by app.debugMode.collectAsState()
     val showDescriptions by app.showDescriptions.collectAsState()
+    val hapticStrength by app.hapticStrength.collectAsState()
     val webDav by app.webDavConn.collectAsState()
     val fnos by app.fnosConn.collectAsState()
     val savedWebDav by app.savedWebDav.collectAsState()
@@ -181,7 +176,7 @@ fun WheelSettingsScreen(navController: NavController) {
     // 构建当前页条目
     val items: List<SettingItem> = when (node) {
         SettingsNode.Root -> buildRootSettings(
-            themeMode, accentArgb, sourceMode, audioQuality, scanPace, debugMode, showDescriptions,
+            sourceMode, audioQuality, scanPace, hapticStrength, debugMode, showDescriptions,
             webDav, fnos, webDavScanning, coverCacheSize, transcodeSize
         )
         SettingsNode.Tabs -> buildTabsSettings(visibleTabs)
@@ -208,19 +203,7 @@ fun WheelSettingsScreen(navController: NavController) {
                 "about" -> push(SettingsNode.About)
             }
             is SettingItem.Choice -> when (item.key) {
-                "theme" -> scope.launch {
-                    val next = when (themeMode) {
-                        ThemeMode.SYSTEM -> ThemeMode.DARK
-                        ThemeMode.DARK -> ThemeMode.LIGHT
-                        ThemeMode.LIGHT -> ThemeMode.SYSTEM
-                    }
-                    app.setTheme(next)
-                }
-                "accent" -> scope.launch {
-                    val idx = AccentPresets.indexOfFirst { (it.second.toArgb() and 0xFFFFFF) == (accentArgb and 0xFFFFFF) }
-                    val next = (idx + 1).let { if (it < 0) 0 else it % AccentPresets.size }
-                    app.setAccentColor(AccentPresets[next].second.toArgb())
-                }
+                "haptic" -> scope.launch { app.setHapticStrength((hapticStrength + 1) % 4) }
                 "source" -> scope.launch {
                     app.setSource(if (sourceMode == SourceMode.WEBDAV) SourceMode.FNOS else SourceMode.WEBDAV)
                 }
@@ -440,22 +423,20 @@ private fun SettingItem.subtitle(): String = when (this) {
 }
 
 private fun buildRootSettings(
-    theme: ThemeMode, accent: Int, source: SourceMode, quality: AudioQuality,
-    scanPace: Long, debug: Boolean, showDescriptions: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
+    source: SourceMode, quality: AudioQuality,
+    scanPace: Long, haptic: Int, debug: Boolean, showDescriptions: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
     coverSize: Long, transcodeSize: Long
 ): List<SettingItem> {
-    val themeName = when (theme) { ThemeMode.SYSTEM -> "跟随系统"; ThemeMode.DARK -> "深色"; ThemeMode.LIGHT -> "浅色" }
-    val accentName = AccentPresets.firstOrNull { (it.second.toArgb() and 0xFFFFFF) == (accent and 0xFFFFFF) }?.first ?: "自定义"
     val sourceName = if (source == SourceMode.WEBDAV) "WebDAV" else "飞牛音乐"
     val qualityName = quality.label
     val paceName = ScanPace.options.firstOrNull { it.intervalMs == scanPace }?.label ?: "均衡"
+    val hapticName = when (haptic) { 0 -> "关闭"; 1 -> "弱"; 2 -> "中"; else -> "强" }
     val out = mutableListOf<SettingItem>()
-    out += SettingItem.Choice("theme", "主题模式", themeName, Icons.Default.ColorLens)
-    out += SettingItem.Choice("accent", "主题色", accentName, Icons.Default.Palette)
     out += SettingItem.Choice("source", "音乐源", sourceName, Icons.Default.MusicNote)
     out += SettingItem.Nav("tabs", "主界面栏目", "勾选并调整顺序", Icons.Default.List)
     out += SettingItem.Choice("quality", "播放音质", qualityName, Icons.Default.Audiotrack)
     out += SettingItem.Choice("scanpace", "扫描节奏", paceName, Icons.Default.Speed)
+    out += SettingItem.Choice("haptic", "震动强度", hapticName, Icons.Default.Vibration)
     out += SettingItem.Nav("webdav", "WebDAV 连接", if (webDav != null) "已配置" else "未配置", Icons.Default.Link)
     out += SettingItem.Nav("fnos", "飞牛音乐登录", if (fnos != null) "已登录" else "未登录", Icons.Default.Storage)
     out += SettingItem.Action("scan", "立即扫描 WebDAV", if (scanning) "扫描中…" else "扫描音乐库", Icons.Default.Storage)
@@ -547,7 +528,11 @@ private fun SettingsList(items: List<SettingItem>, selected: Int, showDescriptio
                     Text(item.title(), style = if (sel) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyLarge,
                         fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal, color = fg,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (showDescriptions) {
+                    // Choice / Toggle 的副标题是「当前值」（如音乐源=WebDAV、震动强度=中），
+                    // 属于选项本身，必须始终显示；只有 Nav / Action 的副标题才是可选说明文字。
+                    // 否则关闭「说明文字」会把音乐源、音质等当前值一起藏掉，看起来像选项消失了。
+                    val isCurrentValue = item is SettingItem.Choice || item is SettingItem.Toggle
+                    if (showDescriptions || isCurrentValue) {
                         Text(item.subtitle(), style = MaterialTheme.typography.labelSmall, color = fg.copy(alpha = 0.6f),
                             maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }

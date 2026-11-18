@@ -24,6 +24,7 @@ import com.musicbox.nas.data.webdav.WebDavClient
 import com.musicbox.nas.data.webdav.WebDavConnection
 import com.musicbox.nas.player.PlayerController
 import com.musicbox.nas.util.CrashLogger
+import com.musicbox.nas.util.Haptics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -158,6 +159,11 @@ class MusicBoxApp : Application() {
     val debugMode = MutableStateFlow(false)
     /** 设置页是否显示各条目的说明文字（副标题），默认显示；可在设置里一键隐藏。 */
     val showDescriptions = MutableStateFlow(true)
+    /**
+     * 转轮震动强度：0=关闭，1=弱，2=中，3=强。默认中档（2）。
+     * 设置页可调，Haptics 每次触发时读取此值换算实际幅度。
+     */
+    val hapticStrength = MutableStateFlow(2)
     /**
      * 横屏 Cover Flow / 由其打开的专辑列表是否为「全屏沉浸」态。
      * 为 true 时 MainActivity 隐藏底部导航与 MiniPlayer，并切到沉浸式系统栏。
@@ -381,6 +387,9 @@ class MusicBoxApp : Application() {
         CrashLogger.mark("Application.onCreate enter")
         super.onCreate()
         instance = this
+        // 转轮震动 + 音效：先加载资源（强度用默认中档，会话恢复后会同步持久化值）
+        runCatching { Haptics.init(this, hapticStrength.value) }
+            .onFailure { CrashLogger.error("haptics-init", it) }
         CrashLogger.mark("clients init start")
         runCatching {
             authRegistry = AuthRegistry()
@@ -477,6 +486,9 @@ class MusicBoxApp : Application() {
         CrashLogger.setEnabled(dbg)
         // 说明文字显隐（默认显示）
         showDescriptions.value = p[T_SHOW_DESC] ?: true
+        // 震动强度（0-3，默认中档 2），同步给 Haptics
+        hapticStrength.value = (p[T_HAPTIC] ?: 2).coerceIn(0, 3)
+        Haptics.setStrength(hapticStrength.value)
         val savedSource = p[S_SOURCE]
         if (savedSource != null) {
             runCatching { sourceMode.value = SourceMode.valueOf(savedSource) }
@@ -639,6 +651,15 @@ class MusicBoxApp : Application() {
         dataStore.edit { it[T_SHOW_DESC] = on }
     }
 
+    /** 设置转轮震动强度（0=关 / 1=弱 / 2=中 / 3=强）：持久化。 */
+    suspend fun setHapticStrength(level: Int) {
+        val v = level.coerceIn(0, 3)
+        hapticStrength.value = v
+        Haptics.setStrength(v)
+        dataStore.edit { it[T_HAPTIC] = v }
+        CrashLogger.info("Settings", "震动强度=$v")
+    }
+
     // ---- 设置 JSON 导出 / 导入 ----
 
     /**
@@ -659,6 +680,7 @@ class MusicBoxApp : Application() {
             put("audio_quality", audioQuality.value.name)
             put("debug_mode", debugMode.value)
             put("show_descriptions", showDescriptions.value)
+            put("haptic_strength", hapticStrength.value)
             put("scan_pace_ms", scanPaceMs.value)
             put("scan_concurrency", scanConcurrency.value)
             put("webdav", JSONObject().apply {
@@ -709,6 +731,7 @@ class MusicBoxApp : Application() {
             ?.let { runCatching { setAudioQuality(AudioQuality.valueOf(it)) } }
         if (o.has("debug_mode")) setDebugMode(o.optBoolean("debug_mode"))
         if (o.has("show_descriptions")) setShowDescriptions(o.optBoolean("show_descriptions"))
+        if (o.has("haptic_strength")) setHapticStrength(o.optInt("haptic_strength"))
         if (o.has("scan_pace_ms")) scanPaceMs.value = o.optLong("scan_pace_ms").coerceIn(0L, 2000L)
         if (o.has("scan_concurrency")) scanConcurrency.value = o.optInt("scan_concurrency").coerceIn(1, 48)
         // WebDAV
@@ -787,3 +810,4 @@ private val Q_QUALITY = stringPreferencesKey("audio_quality")
 private val P_VOLUME = floatPreferencesKey("wheel_volume")
 private val D_DEBUG = booleanPreferencesKey("debug_mode")
 private val T_SHOW_DESC = booleanPreferencesKey("show_descriptions")
+private val T_HAPTIC = intPreferencesKey("haptic_strength")

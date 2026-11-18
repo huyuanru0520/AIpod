@@ -185,72 +185,7 @@ fun SettingsScreen(navController: NavController) {
         Text("设置 · v${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
-        Text("外观", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(8.dp))
-        Row {
-            ThemeMode.values().forEach { mode ->
-                FilterChip(
-                    selected = themeMode == mode,
-                    onClick = { scope.launch { app.setTheme(mode) } },
-                    label = { Text(mode.label()) },
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-            }
-        }
-        Text(
-            "深色模式下所有主要显示区域均为纯黑（AMOLED 省电）。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 6.dp)
-        )
-
-        Spacer(Modifier.height(14.dp))
-        Text("主题色", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(8.dp))
-        val accentArgb by app.accentColor.collectAsState()
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(14.dp)
-        ) {
-            AccentPresets.forEach { (name, color) ->
-                val selected = (color.toArgb() and 0xFFFFFF) == (accentArgb and 0xFFFFFF)
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable {
-                        scope.launch { app.setAccentColor(color.toArgb()) }
-                    }
-                ) {
-                    Box(
-                        Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(color)
-                            .then(
-                                if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
-                                else Modifier
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (selected) {
-                            Icon(
-                                Icons.Default.Check,
-                                contentDescription = "已选择$name",
-                                tint = if (color.toArgb() == 0xFFF2A93B.toInt() || color.toArgb() == 0xFF8CC63F.toInt())
-                                    Color.Black else Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        name,
-                        fontSize = 11.sp,
-                        color = if (selected) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
+        // 主题模式 / 主题色设置已移除：外观固定为深色 + 品牌红，不再提供选项。
 
         Spacer(Modifier.height(20.dp))
         Text("音乐源", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)

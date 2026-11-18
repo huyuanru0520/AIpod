@@ -325,12 +325,8 @@ private fun AppRoot() {
         return
     }
 
-    val themeMode by MusicBoxApp.instance.themeMode.collectAsState()
-    val dark = when (themeMode) {
-        ThemeMode.SYSTEM -> isSystemInDarkTheme()
-        ThemeMode.DARK -> true
-        ThemeMode.LIGHT -> false
-    }
+    // 主题模式设置已移除：外观固定为深色（AMOLED 纯黑 + 品牌红），不再跟随系统或提供选项。
+    val dark = true
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val route = backStackEntry?.destination?.route
@@ -435,28 +431,36 @@ private fun AppRoot() {
         Box(Modifier.fillMaxSize().background(rootBg)) {
             Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxWidth().background(rootBg)) {
-                NavHost(
-                    navController,
-                    startDestination = "library",
-                    // 页面切换动画：只用淡入淡出，去掉所有左右滑动转场（含返回）。
-                    // 需求：除 CoverFlow 自身的横向滑动外，其它页面不带任何左右手势/滑动观感；
-                    // 播放页仍保留从底部升起（见其独立 enter/exit），那是纵向不涉及左右。
-                    enterTransition = { fadeIn(tween(180)) },
-                    exitTransition = { fadeOut(tween(140)) },
-                    popEnterTransition = { fadeIn(tween(180)) },
-                    popExitTransition = { fadeOut(tween(140)) }
-                ) {
-                    composable("library") { LibraryScreen(navController) }
-                    composable("settings") { WheelSettingsScreen(navController) }
-                    composable(
-                        "player",
-                        enterTransition = {
-                            fadeIn(tween(200)) + slideInVertically(tween(260)) { it / 10 }
-                        },
-                        popExitTransition = {
-                            fadeOut(tween(180)) + slideOutVertically(tween(220)) { it / 10 }
-                        }
-                    ) { PlayerScreen(navController) }
+                // 横屏：只保留 CoverFlow 一种模式，设置页 / 播放页一律不显示。
+                // LibraryScreen 的横屏分支本身就是全屏 CoverFlow，因此横屏直接渲染它，
+                // 完全绕过 NavHost —— 从设置页或播放页转到横屏时也会立刻切到封面流；
+                // 转回竖屏后 NavHost 仍在原路由，回到原来的页面。
+                if (orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+                    LibraryScreen(navController)
+                } else {
+                    NavHost(
+                        navController,
+                        startDestination = "library",
+                        // 页面切换动画：只用淡入淡出，去掉所有左右滑动转场（含返回）。
+                        // 需求：除 CoverFlow 自身的横向滑动外，其它页面不带任何左右手势/滑动观感；
+                        // 播放页仍保留从底部升起（见其独立 enter/exit），那是纵向不涉及左右。
+                        enterTransition = { fadeIn(tween(180)) },
+                        exitTransition = { fadeOut(tween(140)) },
+                        popEnterTransition = { fadeIn(tween(180)) },
+                        popExitTransition = { fadeOut(tween(140)) }
+                    ) {
+                        composable("library") { LibraryScreen(navController) }
+                        composable("settings") { WheelSettingsScreen(navController) }
+                        composable(
+                            "player",
+                            enterTransition = {
+                                fadeIn(tween(200)) + slideInVertically(tween(260)) { it / 10 }
+                            },
+                            popExitTransition = {
+                                fadeOut(tween(180)) + slideOutVertically(tween(220)) { it / 10 }
+                            }
+                        ) { PlayerScreen(navController) }
+                    }
                 }
             }
 

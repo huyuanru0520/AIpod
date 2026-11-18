@@ -1,32 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Apple Music 风格前景：白色八分音符（符头 + 符干 + 弧形旗）。
-     整体绕画布中心旋转 -14° 后微调到视觉中心（缩放 0.92：确保圆形遮罩下不被裁边），
-     内容落在 108dp 画布的中心 72dp 安全区内，任意系统遮罩裁切后仍完整。 -->
+<!-- iPod 点击转轮缩小版：外圈轮体（玻璃环轮廓）+ 中心 Home 键 + 四个方位分隔。
+     单色白，落在 108dp 画布中心 66dp 安全区内，任意系统遮罩裁切后仍完整。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <group
-        android:pivotX="54"
-        android:pivotY="54"
-        android:rotation="-14"
-        android:scaleX="0.92"
-        android:scaleY="0.92"
-        android:translateX="1.2"
-        android:translateY="-1.2">
-        <!-- 符头 -->
-        <path
-            android:fillColor="#FFFFFF"
-            android:pathData="M41,69m-13.6,0a13.6,11 0,1 1,27.2 0a13.6,11 0,1 1,-27.2 0" />
-        <!-- 符干 -->
-        <path
-            android:fillColor="#FFFFFF"
-            android:pathData="M54.4,32h5.6v37h-5.6z" />
-        <!-- 弧形旗 -->
-        <path
-            android:fillColor="#FFFFFF"
-            android:pathData="M59.6,32.2C70.4,35.2 78,44 78,53.6 78,56.7 76,58.8 73.2,58.8 70.4,58.8 68.6,56.7 68.6,53.8 68.6,48 64.6,43.6 59.6,41.6Z" />
-    </group>
+    <!-- 外圈轮体：用环形 path（evenOdd 挖空中心），白色 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M54,21 A33,33 0 1,1 53.99,21 Z M54,31 A23,23 0 1,0 54.01,31 Z" />
+
+    <!-- 中心 Home 键：实心圆 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,45 a9,9 0 1,1 0.01,0 Z" />
+
+    <!-- 四个方位的短分隔缺口：用背景色（透明）在环上开缝，形成 MENU/上一首/下一首/播放四区 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M52.6,21.5 L55.4,21.5 L55.4,31 L52.6,31 Z" />
 </vector>
