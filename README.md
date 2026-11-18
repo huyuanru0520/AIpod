@@ -10,7 +10,7 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.24-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material3-4285F4?logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![Media3](https://img.shields.io/badge/Media3-1.5.1-FF6F00)](https://developer.android.com/media/media3)
-[![Version](https://img.shields.io/badge/version-2.0.4-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 </div>
@@ -28,7 +28,7 @@ Matrix Music 不建索引库、不依赖服务端插件，直接用 WebDAV 协�
 | 模块 | 说明 |
 | --- | --- |
 | **音源** | WebDAV（Basic / 匿名）、飞牛 FnOS 音乐（账号登录、多线路回退）；同一时刻启用一种，设置里切换 |
-| **媒体库** | 歌曲 / 歌手 / 歌单 / 专辑 / 文件夹 / 风格 / 漫游 / 搜索八个栏目，可勾选并**拖动顺序** |
+| **媒体库** | **iPod 式滚轮首页**：转轮上下选、中心键进入、MENU 返回，第一屏即滚轮选择；歌曲 / 专辑 / 歌手 / 歌单 / 文件夹 / 风格 / 漫游 / 搜索层级浏览，栏目可在设置里勾选并拖动顺序 |
 | **飞牛分类** | 风格直接读服务端 `/genre/list`；文件夹用 `audioSpec.path` 本地建树；漫游为全库随机流 |
 | **扫描** | 四档节奏（温和 250ms·3 路 → 极速 0ms·32 路），STRM 场景可全速；结果落盘缓存，冷启动秒开 |
 | **线路** | 主备地址自动切换；切换时直接改写索引里的地址，不重新扫描，正在播的歌也会自动换线重试 |
@@ -36,8 +36,8 @@ Matrix Music 不建索引库、不依赖服务端插件，直接用 WebDAV 协�
 | **软解兜底** | 内置 FFmpeg 扩展（4 ABI），MediaCodec 不支持的无损格式自动降级软解 |
 | **封面** | 优先用同目录的 cover 图（`cover.jpg` / `folder.png` / `front.webp` 等，省流量），目录没有才从音频文件内嵌标签提取（FLAC PICTURE / VorbisComment base64 / ID3 APIC / MP4 `covr`）；通知栏同步显示 |
 | **歌词** | 优先读 metadata 内嵌（FLAC `LYRICS`、ID3 `USLT`、MP4 `©lyr`），没有才回退同目录同名 `.lrc`；播放时当前句恒定居中 |
-| **播放页** | **透明玻璃 iPod 点击轮**：转动调音量（12°/格细震，无刻度线）；MENU 在本页展开队列并用滚轮选歌、中心确认；中心内凹 Home 键切换进度模式，滚轮快进快退；短按左右切歌、长按快退快进 |
-| **交互** | CoverFlow 横屏浏览、当前播放卡片从底部升起、全量手势返回、列表返回保留原滚动位置 |
+| **播放页** | **透明玻璃 iPod 点击轮**：转动调音量（12°/格细震，无刻度线）；MENU 在本页展开队列（带封面）用滚轮选歌、中心确认；中心内凹 Home 键就地浮出进度 HUD，滚轮快进快退、再按退出；短按左右切歌、长按快退快进。背景为整张封面真高斯模糊（Apple Music 风格） |
+| **交互** | 横屏直接以 CoverFlow 唱片架展示列表、滚轮切换专辑；当前播放卡片从底部升起、全量手势返回 |
 | **音质** | 原采样率直通，或本地转 256kbps AAC 缓存（省流量、兼容老设备） |
 | **外观** | iOS 26 风格液态玻璃外壳（悬浮 Dock + 玻璃迷你播放器），内部仍是 Material 3；10 种主题色可选，深浅色分别推导 |
 

@@ -74,12 +74,14 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.layout.offset
@@ -184,10 +186,10 @@ fun PlayerScreen(navController: NavController) {
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {
             val wheel = minOf(maxWidth * 0.64f, maxHeight * 0.40f, 286.dp)
             var showLyrics by remember { mutableStateOf(false) }
-            // 转轮随当前界面切换职责：队列选歌 / 调进度 / 调音量
+            // 转轮随当前界面切换职责：队列选歌 / 调进度 / 调音量。
+            // 进度模式不再切换中间区为独立面板，而是就地叠加一个进度 HUD（见下方 WheelProgressHud）。
             val body = when {
                 menuOpen -> "menu"
-                progressMode -> "progress"
                 showLyrics -> "lyrics"
                 else -> "cover"
             }
@@ -234,8 +236,13 @@ fun PlayerScreen(navController: NavController) {
                     }
                 } else {
                     val c = current
-                    // 中间区域：音量模式显示封面 / 歌词；进度模式显示大进度条
-                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                    // 中间区域：显示封面 / 歌词 / 队列；菜单打开时底部留白，避免与滚轮重叠
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .then(if (menuOpen) Modifier.padding(bottom = 10.dp) else Modifier)
+                    ) {
                         Crossfade(
                             targetState = body,
                             animationSpec = tween(durationMillis = 180),
@@ -248,7 +255,6 @@ fun PlayerScreen(navController: NavController) {
                                     currentIndex = idx,
                                     onSelect = { selectedQueueIndex = it }
                                 )
-                                "progress" -> WheelProgressPanel(durationMs = duration)
                                 "lyrics" -> Box(Modifier.fillMaxSize()) {
                                     LyricsView(
                                         current = c,
@@ -304,6 +310,9 @@ fun PlayerScreen(navController: NavController) {
                                 onSeek = { PlayerController.seekTo(it) }
                             )
                         }
+                    } else if (progressMode && !menuOpen) {
+                        // 中心键就地调进度：保留封面，仅在转轮上方浮出一块进度 HUD
+                        WheelProgressHud(durationMs = duration)
                     }
                     Spacer(Modifier.height(2.dp))
 
@@ -346,7 +355,7 @@ fun PlayerScreen(navController: NavController) {
                         // 略微上移，避免整块压在屏幕底部
                         modifier = Modifier
                             .align(Alignment.CenterHorizontally)
-                            .offset(y = (-18).dp)
+                            .offset(y = if (menuOpen) 0.dp else (-18).dp)
                     )
                     Spacer(Modifier.height(24.dp))
                 }
@@ -414,11 +423,17 @@ private fun QueueMenuList(
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    CoverImage(
+                        t.coverUrl,
+                        Modifier.size(46.dp).clip(RoundedCornerShape(6.dp)),
+                        embeddedAudioUrl = t.embeddedAudioUrl
+                    )
+                    Spacer(Modifier.width(10.dp))
                     Text(
                         "${i + 1}",
                         style = MaterialTheme.typography.labelSmall,
                         color = if (selected) Color.White else Color.White.copy(alpha = 0.45f),
-                        modifier = Modifier.width(28.dp)
+                        modifier = Modifier.width(22.dp)
                     )
                     Column(Modifier.weight(1f)) {
                         Text(
@@ -445,58 +460,42 @@ private fun QueueMenuList(
     }
 }
 
-/** 中心 Home 键进入的进度模式：只有这一块订阅 position，不会牵动整页重组。 */
+/**
+ * 中心 Home 键触发的「就地进度 HUD」：贴在转轮上方的一小块玻璃浮层，不占用 / 替换封面区。
+ * 只有这一块订阅 position（500ms 一次），不会牵动整页重组。
+ */
 @Composable
-private fun WheelProgressPanel(durationMs: Long) {
+private fun WheelProgressHud(durationMs: Long) {
     val positionMs by PlayerController.position.collectAsState()
     val progress = if (durationMs > 0L) {
         (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     } else 0f
     Column(
         Modifier
-            .fillMaxSize()
-            .padding(horizontal = 30.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.Black.copy(alpha = 0.34f))
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(
-            "歌曲进度 · 滚轮快进快退",
-            style = MaterialTheme.typography.labelMedium,
-            color = Color.White.copy(alpha = 0.55f)
-        )
-        Spacer(Modifier.height(14.dp))
-        Text(
-            formatDuration(positionMs),
-            style = MaterialTheme.typography.headlineLarge,
-            color = Color.White
-        )
-        Spacer(Modifier.height(12.dp))
+        Text("歌曲进度", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.6f))
+        Spacer(Modifier.height(6.dp))
+        Text(formatDuration(positionMs), style = MaterialTheme.typography.headlineMedium, color = Color.White)
+        Spacer(Modifier.height(8.dp))
         Box(
-            Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(3.dp))
+            Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(3.dp))
                 .background(Color.White.copy(alpha = 0.18f))
         ) {
-            Box(
-                Modifier
-                    .fillMaxWidth(progress)
-                    .fillMaxHeight()
-                    .background(Color(0xFFFA2D48))
-            )
+            Box(Modifier.fillMaxWidth(progress).fillMaxHeight().background(Color(0xFFFA2D48)))
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("0:00", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f))
             Text(formatDuration(durationMs), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f))
         }
-        Spacer(Modifier.height(18.dp))
-        Text(
-            "再按一次中心键退出",
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White.copy(alpha = 0.45f),
-            textAlign = TextAlign.Center
-        )
+        Spacer(Modifier.height(6.dp))
+        Text("滚轮快进快退 · 再按一次中心键退出", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.45f))
     }
 }
 
@@ -869,12 +868,14 @@ private fun LandscapeControls(
 }
 
 /**
- * 播放页背景：封面降到 24×24 再拉伸（双线性插值本身就是最好的模糊）+ 主色调叠加 + 暗化渐变。
+ * 播放页背景（Apple Music 风格）：整张封面铺满 + 真高斯模糊 + 主色调叠加 + 上下暗化渐变。
  *
- * 刻意**不用** `Modifier.blur(56.dp)`：全屏高斯模糊在 Android 12+ 是离屏 RenderEffect，
- * 每次重绘都在 GPU 上多跑一遍全屏 pass，长时间播放明显费电、低端机还会掉帧。
- * 24×24 的图拉伸到全屏后视觉几乎一致，成本却接近于零。
- * 切歌时用 260ms 交叉淡入，避免背景"啪"地换色。
+ * 2.0.4 之前用「封面降到 24×24 再拉伸」的缩放模糊来省性能，但放大后是明显的色块马赛克，
+ * 完全没有 Apple Music 那种柔和、连续的磨砂质感。这里改回真 `Modifier.blur`：
+ * - 用双线性插值放大到略大于屏幕（scale 1.16f），保证模糊后边缘不露底；
+ * - 48dp 高斯模糊把封面细节揉成柔和色雾；
+ * - 再叠一层从封面提取的主色调和上下暗化渐变，保证白色文字始终可读。
+ * 切歌 260ms 交叉淡入，避免背景"啪"地换色。
  */
 @Composable
 private fun CoverBackdrop(track: Track?) {
@@ -889,34 +890,40 @@ private fun CoverBackdrop(track: Track?) {
 @Composable
 private fun BackdropLayer(track: Track?) {
     val bitmap = rememberCoverBitmap(track?.coverUrl, track?.embeddedAudioUrl)
-    val tiny = remember(bitmap) {
-        runCatching {
-            bitmap?.asAndroidBitmap()?.let { Bitmap.createScaledBitmap(it, 24, 24, true) }
-        }.getOrNull()
+    val dominant = remember(bitmap) {
+        val bmp = bitmap?.asAndroidBitmap()
+        // dominantColorOf 需要普通 Bitmap：先用小尺寸采样，避免在全尺寸大图上遍历像素
+        val small = bmp?.let {
+            runCatching { Bitmap.createScaledBitmap(it, 32, 32, true) }.getOrNull()
+        }
+        small?.let { dominantColorOf(it) } ?: Color(0xFF2B2B31)
     }
-    val dominant = remember(tiny) { tiny?.let { dominantColorOf(it) } ?: Color(0xFF2B2B31) }
 
     // 封面就绪 / 切歌时让背景图淡入，避免从纯色底"啪"地跳到图片
     val bgAlpha by animateFloatAsState(
-        targetValue = if (tiny != null) 0.92f else 0f,
+        targetValue = if (bitmap != null) 0.9f else 0f,
         animationSpec = tween(durationMillis = 420),
         label = "backdropAlpha"
     )
-    if (tiny != null) {
+    if (bitmap != null) {
         Image(
-            bitmap = tiny.asImageBitmap(),
+            bitmap = bitmap,
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize().alpha(bgAlpha)
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { scaleX = 1.16f; scaleY = 1.16f }
+                .blur(48.dp)
+                .alpha(bgAlpha)
         )
     }
     // 主色调统一整体色调
-    Box(Modifier.fillMaxSize().background(dominant.copy(alpha = 0.42f)))
+    Box(Modifier.fillMaxSize().background(dominant.copy(alpha = 0.38f)))
     // 上下暗化，保证白色文字可读
     Box(
         Modifier.fillMaxSize().background(
             Brush.verticalGradient(
-                listOf(Color.Black.copy(alpha = 0.30f), Color.Black.copy(alpha = 0.74f))
+                listOf(Color.Black.copy(alpha = 0.28f), Color.Black.copy(alpha = 0.72f))
             )
         )
     )

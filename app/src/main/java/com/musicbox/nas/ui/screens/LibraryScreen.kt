@@ -113,7 +113,7 @@ fun LibraryScreen(navController: NavController) {
 // ==================== 统一数据适配层 ====================
 
 /** 专辑 / 歌手 / 歌单列表项；tracks、albums 用于 WebDAV 这类已全量索引的音源。 */
-private data class SourceEntry(
+internal data class SourceEntry(
     val id: String,
     val name: String,
     val subtitle: String,
@@ -128,7 +128,7 @@ private data class SourceEntry(
  * 两种音源共用的数据接口。飞牛按需走网络分页，WebDAV 直接返回内存索引，
  * 但界面层只看到同样的 suspend 回调，因此布局与交互完全一致。
  */
-private class SourceBrowserData(
+internal class SourceBrowserData(
     val sourceLabel: String,
     val loadSongs: suspend (page: Int) -> Pair<List<Track>, Int>,
     val loadAlbums: suspend () -> List<SourceEntry>,
@@ -205,7 +205,7 @@ private fun foldersOf(
     return childFolders to direct
 }
 
-private fun buildDavData(lib: DavLibrary): SourceBrowserData {
+internal fun buildDavData(lib: DavLibrary): SourceBrowserData {
     fun albumEntry(a: DavAlbum, prefix: String) = SourceEntry(
         id = "$prefix-${a.name}-${a.artist}",
         name = a.name.ifBlank { "未知专辑" },
@@ -277,7 +277,7 @@ private fun buildDavData(lib: DavLibrary): SourceBrowserData {
     )
 }
 
-private fun buildFnosData(): SourceBrowserData {
+internal fun buildFnosData(): SourceBrowserData {
     val client = MusicBoxApp.instance.fnosClient
     // 文件夹树由本地全量索引构建：按父路径缓存，避免反复 filter 上万首歌
     val fnosFolderCache = HashMap<String?, Pair<List<String>, List<Track>>>()
@@ -1564,12 +1564,11 @@ private fun WebDavSection(navController: NavController) {
         )
     } else {
         val data = remember(c, lib) { buildDavData(lib) }
-        SourceBrowser(
+        WheelHome(
             data = data,
             navController = navController,
             memoryKey = "webdav",
-            statusLine = data.status,
-            scanning = false
+            statusLine = data.status
         )
     }
 }
@@ -1672,7 +1671,7 @@ private fun FnOSSection(navController: NavController) {
         return
     }
     val data = remember(c) { buildFnosData() }
-    SourceBrowser(data = data, navController = navController, memoryKey = "fnos")
+    WheelHome(data = data, navController = navController, memoryKey = "fnos")
 }
 
 /** 未连接时主页只做引导，不显示任何连接表单或账号信息。 */
