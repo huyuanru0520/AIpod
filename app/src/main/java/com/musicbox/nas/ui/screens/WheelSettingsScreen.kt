@@ -77,7 +77,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.musicbox.nas.AudioQuality
 import com.musicbox.nas.BuildConfig
@@ -91,6 +90,8 @@ import com.musicbox.nas.player.PlayerController
 import com.musicbox.nas.ui.components.ClickWheel
 import com.musicbox.nas.ui.components.clearCoverCache
 import com.musicbox.nas.ui.components.coverCacheSizeBytes
+import com.musicbox.nas.ui.components.fadeInList
+import com.musicbox.nas.ui.components.glassHighlight
 import com.musicbox.nas.ui.components.rememberCoverBitmap
 import com.musicbox.nas.ui.theme.AccentPresets
 import com.musicbox.nas.ui.theme.BrandRed
@@ -331,8 +332,8 @@ fun WheelSettingsScreen(navController: NavController) {
     // 当前曲目封面（设置页背景也跟随正在播放，观感与主页一致）
     val currentTrack = queue.getOrNull(currentIndex)
 
-    Box(Modifier.fillMaxSize().background(BrandRed)) {
-        // 背景：有播放用封面模糊，无播放用红色光晕
+    Box(Modifier.fillMaxSize().background(Color(0xFF1A1A1D))) {
+        // 背景：有播放用封面模糊，无播放用中性磨砂玻璃
         SettingsBackdrop(currentTrack, BrandRed)
         Column(Modifier.fillMaxSize()) {
             // 顶栏标题（静态，不可点）
@@ -514,10 +515,11 @@ private fun SettingsList(items: List<SettingItem>, selected: Int, showDescriptio
         if (selected in items.indices) runCatching { listState.animateScrollToItem(selected, -180) }
     }
     val fg = Color.White
+    val rowShape = RoundedCornerShape(14.dp)
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+        modifier = Modifier.fillMaxSize().fadeInList(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
         contentPadding = PaddingValues(vertical = 24.dp)
     ) {
         itemsIndexed(items) { i, item ->
@@ -525,18 +527,11 @@ private fun SettingsList(items: List<SettingItem>, selected: Int, showDescriptio
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .height(if (item is SettingItem.Info && showDescriptions) 56.dp else 52.dp)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp)
+                    .glassHighlight(sel, rowShape)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 选中指示：左侧短竖线，取代灰色圆角背景框
-                Box(
-                    Modifier
-                        .size(width = 3.dp, height = 28.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(if (sel) BrandRed else Color.Transparent)
-                )
-                Spacer(Modifier.width(12.dp))
                 val icon = when (item) {
                     is SettingItem.Nav -> item.icon
                     is SettingItem.Choice -> item.icon
@@ -556,9 +551,6 @@ private fun SettingsList(items: List<SettingItem>, selected: Int, showDescriptio
                         Text(item.subtitle(), style = MaterialTheme.typography.labelSmall, color = fg.copy(alpha = 0.6f),
                             maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
-                }
-                if (sel && item !is SettingItem.Info) {
-                    Text("↵", color = Color.White, fontSize = 20.sp)
                 }
             }
         }
@@ -586,7 +578,7 @@ private fun LogsScreenBody(showDetails: Boolean) {
     }
 }
 
-/** 设置页背景：与主界面一致（有播放用封面模糊，无播放用红色光晕）。 */
+/** 设置页背景：与主界面一致（有播放用封面模糊，无播放用中性磨砂玻璃）。 */
 @Composable
 private fun SettingsBackdrop(current: com.musicbox.nas.data.Track?, red: Color) {
     val bmp: ImageBitmap? = rememberCoverBitmap(current?.coverUrl, current?.embeddedAudioUrl)
@@ -594,20 +586,29 @@ private fun SettingsBackdrop(current: com.musicbox.nas.data.Track?, red: Color) 
         if (bmp != null) {
             Image(bmp, null, contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = 1.15f; scaleY = 1.15f }.blur(32.dp))
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.48f)))
         } else {
+            // 无播放：中性磨砂玻璃（深灰雾面 + 柔光斑 + 高斯模糊），不掺任何彩色
             Canvas(
                 Modifier
                     .fillMaxSize()
-                    .graphicsLayer { scaleX = 1.1f; scaleY = 1.1f }
-                    .blur(48.dp)
+                    .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
+                    .blur(40.dp)
             ) {
                 val w = size.width; val h = size.height
-                drawRect(Brush.radialGradient(
-                    colors = listOf(red.copy(alpha = 0.96f), red, Color(0xFF8E1024), Color(0xFF4E0814)),
-                    center = Offset(w * 0.42f, h * 0.30f),
-                    radius = maxOf(w, h) * 0.95f
+                drawRect(Brush.verticalGradient(
+                    listOf(Color(0xFF242428), Color(0xFF151517), Color(0xFF2A2A2F))
                 ))
+                drawCircle(
+                    brush = Brush.radialGradient(listOf(Color.White.copy(alpha = 0.10f), Color.Transparent)),
+                    radius = maxOf(w, h) * 0.75f,
+                    center = Offset(w * 0.28f, h * 0.18f)
+                )
+                drawCircle(
+                    brush = Brush.radialGradient(listOf(Color.White.copy(alpha = 0.05f), Color.Transparent)),
+                    radius = maxOf(w, h) * 0.6f,
+                    center = Offset(w * 0.85f, h * 0.88f)
+                )
             }
         }
     }

@@ -69,7 +69,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.musicbox.nas.LibraryTabs
 import com.musicbox.nas.MusicBoxApp
@@ -77,6 +76,8 @@ import com.musicbox.nas.data.Track
 import com.musicbox.nas.player.PlayerController
 import com.musicbox.nas.ui.components.ClickWheel
 import com.musicbox.nas.ui.components.CoverImage
+import com.musicbox.nas.ui.components.fadeInList
+import com.musicbox.nas.ui.components.glassHighlight
 import com.musicbox.nas.ui.components.rememberCoverBitmap
 import com.musicbox.nas.ui.theme.BrandRed
 import com.musicbox.nas.util.CrashLogger
@@ -254,8 +255,8 @@ internal fun WheelHome(
                             }
                         }
                         LazyColumn(
-                            Modifier.fillMaxSize().weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                            Modifier.fillMaxSize().weight(1f).fadeInList(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                         ) {
                             itemsIndexed(items) { i, item ->
@@ -321,36 +322,42 @@ internal fun WheelHome(
     Box(Modifier.fillMaxSize()) {
         WheelBackdrop(current = currentTrack, red = appleRed)
         Column(Modifier.fillMaxSize()) {
-            // 顶栏只是「屏幕」上的一块静态标题，没有任何按钮——首页唯一交互是转轮。
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        effectiveNode.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    val sub = when {
-                        loading -> "加载中…"
-                        loadError != null -> loadError ?: ""
-                        items.isEmpty() -> effectiveNode.hint
-                        else -> "共 ${items.size} 项 · 转动滚轮选择"
+            // 首页（Root）不再显示「音乐库」标题和下方说明文字——滚轮上方就是纯列表屏幕。
+            // 子层级仍保留标题，方便用户知道自己在哪一层。
+            if (node !is WheelNode.Root) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            effectiveNode.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        val sub = when {
+                            loading -> "加载中…"
+                            loadError != null -> loadError ?: ""
+                            items.isEmpty() -> effectiveNode.hint
+                            else -> "共 ${items.size} 项 · 转动滚轮选择"
+                        }
+                        Text(
+                            sub,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.75f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
-                    Text(
-                        sub,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White.copy(alpha = 0.75f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
                 }
+                // 首页隐藏标题后，屏幕区自己补状态栏避让
+            } else {
+                Spacer(Modifier.statusBarsPadding())
             }
 
             if (!statusLine.isNullOrBlank()) {
@@ -437,7 +444,7 @@ internal fun WheelHome(
 /**
  * 主页动态背景：
  * - 有正在播放曲目 → 取该曲目封面做真高斯模糊铺满，再叠一层半透明暗色保证白字可读；
- * - 无正在播放 → 苹果音乐红的径向渐变（中心亮、边缘暗），模拟「红色模糊光晕」。
+ * - 无正在播放 → 中性「磨砂玻璃」：深灰底 + 柔和白色光斑 + 高斯模糊，不带任何彩色。
  *
  * 封面通过 [rememberCoverBitmap] 走同一份 LRU 缓存，加载完成自动刷新；不订阅进度流，
  * 因此切歌之外不会因每秒进度更新而重组。
@@ -456,29 +463,37 @@ private fun WheelBackdrop(current: com.musicbox.nas.data.Track?, red: Color) {
                     .graphicsLayer { scaleX = 1.15f; scaleY = 1.15f }
                     .blur(32.dp)
             )
-            // 暗化蒙层：让白色文字与选中高亮在任意封面颜色上都清晰
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.42f)))
+            // 暗化蒙层：让白色文字与玻璃高亮在任意封面颜色上都清晰
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.46f)))
         } else {
-            // 无播放：苹果红径向渐变做真高斯模糊，得到柔和光晕而非硬边色块（需求：背景模糊处理）。
+            // 无播放：中性磨砂玻璃（深灰雾面 + 柔光斑 + 高斯模糊），不掺任何彩色
             Canvas(
                 Modifier
                     .fillMaxSize()
-                    .graphicsLayer { scaleX = 1.1f; scaleY = 1.1f }
-                    .blur(48.dp)
+                    .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
+                    .blur(40.dp)
             ) {
                 val w = size.width
                 val h = size.height
                 drawRect(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            red.copy(alpha = 0.96f),
-                            red,
-                            Color(0xFF8E1024),
-                            Color(0xFF4E0814)
-                        ),
-                        center = Offset(w * 0.42f, h * 0.30f),
-                        radius = maxOf(w, h) * 0.95f
+                    Brush.verticalGradient(
+                        listOf(Color(0xFF242428), Color(0xFF151517), Color(0xFF2A2A2F))
                     )
+                )
+                // 两团中性白柔光，营造磨砂玻璃透光的层次（灰度，无彩色）
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        listOf(Color.White.copy(alpha = 0.10f), Color.Transparent)
+                    ),
+                    radius = maxOf(w, h) * 0.75f,
+                    center = Offset(w * 0.28f, h * 0.18f)
+                )
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        listOf(Color.White.copy(alpha = 0.05f), Color.Transparent)
+                    ),
+                    radius = maxOf(w, h) * 0.6f,
+                    center = Offset(w * 0.85f, h * 0.88f)
                 )
             }
         }
@@ -614,31 +629,25 @@ private fun WheelList(
         }
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        // 红底上统一用白字 / 白色高亮
+        // 磨砂玻璃背景上统一用白字 / 白色高亮
         val fg = Color.White
+        val rowShape = RoundedCornerShape(14.dp)
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 24.dp)
+            modifier = Modifier.fillMaxSize().fadeInList(),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            contentPadding = PaddingValues(vertical = 24.dp)
         ) {
             itemsIndexed(items) { i, item ->
                 val sel = i == selected
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .height(66.dp)
+                        .padding(horizontal = 12.dp)
+                        .glassHighlight(sel, rowShape)
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 选中指示：左侧一条短竖线，取代原来的灰色圆角背景框
-                    Box(
-                        Modifier
-                            .size(width = 3.dp, height = 30.dp)
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(if (sel) BrandRed else Color.Transparent)
-                    )
-                    Spacer(Modifier.width(10.dp))
                     when (item) {
                         is WheelItem.Action -> {
                             Box(Modifier.size(48.dp), Alignment.Center) {
@@ -673,9 +682,6 @@ private fun WheelList(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                    }
-                    if (sel) {
-                        Text("↵", color = Color.White, fontSize = 20.sp)
                     }
                 }
             }

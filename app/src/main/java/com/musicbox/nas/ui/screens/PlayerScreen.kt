@@ -109,6 +109,8 @@ import com.musicbox.nas.ui.components.BareCover
 import com.musicbox.nas.ui.components.ClickWheel
 import com.musicbox.nas.ui.components.CoverImage
 import com.musicbox.nas.ui.components.HiResBadge
+import com.musicbox.nas.ui.components.fadeInList
+import com.musicbox.nas.ui.components.glassHighlight
 import com.musicbox.nas.ui.components.rememberCoverBitmap
 import com.musicbox.nas.ui.theme.BrandRed
 import com.musicbox.nas.util.formatDuration
@@ -171,8 +173,8 @@ fun PlayerScreen(navController: NavController) {
                 launchSingleTop = true
             }
         }
-        // 转场瞬间先给一块红底，避免闪一下黑屏
-        Box(Modifier.fillMaxSize().background(BrandRed))
+        // 转场瞬间先给一块中性深灰底，避免闪一下黑屏
+        Box(Modifier.fillMaxSize().background(Color(0xFF1A1A1D)))
         return
     }
 
@@ -432,20 +434,18 @@ private fun QueueMenuList(
         LazyColumn(
             Modifier
                 .weight(1f)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .fadeInList(),
             state = listState,
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             itemsIndexed(queue) { i, t ->
                 val selected = i == selectedIndex
+                val rowShape = RoundedCornerShape(12.dp)
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(
-                            if (selected) Color.White.copy(alpha = 0.20f)
-                            else Color.White.copy(alpha = 0.04f)
-                        )
+                        .glassHighlight(selected, rowShape)
                         .clickable { onSelect(i) }
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
