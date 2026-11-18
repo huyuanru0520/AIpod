@@ -154,10 +154,14 @@ fun ClickWheel(
                         while (abs(accum) >= STEP_DEGREES) {
                             val forward = accum > 0
                             accum -= if (forward) STEP_DEGREES else -STEP_DEGREES
+                            // 震动/音效做节流，但每一格都必须上报 onRotate：
+                            // 之前把 onRotate 也放在节流判断之后，连续转动时多格被 continue 吞掉，
+                            // 表现就是搜索字母盘 / 选歌几乎不跟着转（只有偶尔一格生效）。
                             val now = System.currentTimeMillis()
-                            if (now - lastTickAt < MIN_TICK_INTERVAL_MS) continue
-                            lastTickAt = now
-                            Haptics.tick(context, view)
+                            if (now - lastTickAt >= MIN_TICK_INTERVAL_MS) {
+                                lastTickAt = now
+                                Haptics.tick(context, view)
+                            }
                             onRotate(if (forward) 1 else -1)
                         }
                     }
