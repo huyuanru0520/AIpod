@@ -462,7 +462,10 @@ private fun AppRoot() {
         // 顶部也就不会残留一条与状态栏等高的黑带。
         // 悬浮外壳（Dock + 迷你播放器）浮在内容之上，内容区按实测高度留出空位，
         // 这样列表最后一项不会被 Dock 盖住，Dock 也始终悬在底部而不是挤占布局。
-        val shellVisible = !onPlayer && !fullScreen
+        // library 首页是纯粹的 iPod 模拟器：滚轮上方那一块就是屏幕，没有 Dock、没有
+        // 「正在播放」横条，唯一交互是转轮，因此首页不显示外壳。设置 / 歌单等二级页保留
+        // Dock 作为返回手段（它们是普通 Material 页面，需要触摸操作）。
+        val shellVisible = !onPlayer && !fullScreen && route != "library"
         var shellHeight by remember { mutableStateOf(0.dp) }
         val density = LocalDensity.current
 

@@ -1,15 +1,9 @@
 package com.musicbox.nas.ui.screens
 
 import android.content.res.Configuration
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -40,9 +34,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -53,10 +45,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
@@ -109,6 +102,9 @@ internal fun WheelHome(
     var loading by remember(data) { mutableStateOf(true) }
     var loadError by remember(data) { mutableStateOf<String?>(null) }
     var searchQuery by remember(data) { mutableStateOf("") }
+    // 搜索页的字母盘光标（纯滚轮输入，不用软键盘）
+    var searchChar by remember(data) { mutableStateOf(0) }
+    var searchPhase by remember(data) { mutableStateOf(0) } // 0=字母盘输入, 1=结果列表
 
     val node = stack.last()
     // 横屏：Root 主菜单直接映射为「专辑」层，进入第一屏即为封面流（对齐原 CoverFlow 行为）
@@ -167,6 +163,33 @@ internal fun WheelHome(
         }
     }
 
+    // 搜索字母盘：iPod 式滚轮输入，不用软键盘。末尾 ⌫=退格，✓=完成并看结果。
+    val searchChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ ⌫✓"
+
+    /** 转轮中心键的统一分派：搜索输入态走字母盘，其余走普通层级。 */
+    fun onWheelConfirm() {
+        if (node is WheelNode.Search && searchPhase == 0) {
+            when (val ch = searchChars[searchChar.coerceIn(searchChars.indices)]) {
+                '⌫' -> searchQuery = searchQuery.dropLast(1)
+                '✓' -> if (searchQuery.isNotBlank()) searchPhase = 1
+                ' ' -> searchQuery += " "
+                else -> searchQuery += ch
+            }
+            return
+        }
+        confirm(items.getOrNull(selected))
+    }
+
+    /** 转轮 MENU 键：搜索输入态退格 / 结果态回字母盘；其余返回上一层。 */
+    fun onWheelMenu() {
+        when {
+            node is WheelNode.Search && searchPhase == 0 ->
+                searchQuery = searchQuery.dropLast(1)
+            node is WheelNode.Search && searchPhase == 1 -> searchPhase = 0
+            else -> pop()
+        }
+    }
+
     // 沉浸：横屏 CoverFlow 全屏；竖屏保留系统栏（状态栏常驻，避免历史黑带问题）。
     val app = MusicBoxApp.instance
     val immersive = isLandscape
@@ -181,11 +204,12 @@ internal fun WheelHome(
             .background(if (immersive) Color.Black else MaterialTheme.colorScheme.background)
     ) {
         Column(Modifier.fillMaxSize()) {
-            // 顶栏：无返回箭头、无播放队列按钮，仅右上角设置
+            // 顶栏只是「屏幕」上的一块静态标题，没有任何按钮——首页唯一交互是转轮。
+            // 标题 / 副标题直接画在屏幕上，不去响应点击。
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                    .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
@@ -211,13 +235,6 @@ internal fun WheelHome(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                IconButton(onClick = { navController.navigate("settings") }) {
-                    Icon(
-                        Icons.Default.Settings,
-                        contentDescription = "设置",
-                        tint = if (immersive) Color.White else MaterialTheme.colorScheme.onBackground
-                    )
-                }
             }
 
             if (!statusLine.isNullOrBlank() && !immersive) {
@@ -230,18 +247,33 @@ internal fun WheelHome(
                 )
             }
 
-            if (node is WheelNode.Search) {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    label = { Text("搜索歌曲 / 歌手 / 专辑") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-            }
-
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            // 「屏幕」：滚轮上方那块显示区，做成 iPod 式内嵌面板——圆角 + 内嵌底色 + 细描边。
+            // 只影响观感，里面所有内容仍由转轮驱动，无任何点击。
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(
+                        if (immersive) Color(0xFF0C0C0E)
+                        else {
+                            val bg = MaterialTheme.colorScheme.background
+                            // 浅色用略深于背景的灰、深色用略亮于背景的灰，形成「屏幕」凹陷感
+                            if (bg.luminance() < 0.5f) Color(0xFF202024) else Color(0xFFEDEDF0)
+                        }
+                    )
+                    .border(1.dp, if (immersive) Color.White.copy(alpha = 0.08f)
+                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f), RoundedCornerShape(18.dp))
+            ) {
                 when {
+                    // 搜索输入态：屏幕就是一块字母盘，转动滚轮选字母，中心键确认，MENU 退格
+                    node is WheelNode.Search && searchPhase == 0 -> SearchWheelPad(
+                        query = searchQuery,
+                        chars = searchChars,
+                        charIndex = searchChar,
+                        dark = !immersive
+                    )
                     loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                         CircularProgressIndicator(color = if (immersive) Color.White else MaterialTheme.colorScheme.primary)
                     }
@@ -264,19 +296,14 @@ internal fun WheelHome(
                         // 横屏：列表区直接展示 CoverFlow，滚轮切换
                         CoverFlowWheel(
                             items = items,
-                            selected = selected.coerceIn(0, items.lastIndex),
-                            onSelect = { selected = it },
-                            onConfirm = { confirm(items.getOrNull(selected)) },
-                            onSearch = { navController.navigate("settings") }
+                            selected = selected.coerceIn(0, items.lastIndex)
                         )
                     }
                     else -> {
                         WheelList(
                             items = items,
                             selected = selected,
-                            immersive = immersive,
-                            onSelect = { selected = it },
-                            onConfirm = { confirm(items.getOrNull(selected)) }
+                            immersive = immersive
                         )
                     }
                 }
@@ -294,8 +321,12 @@ internal fun WheelHome(
                     diameter = if (isLandscape) 168.dp else 264.dp,
                     isPlaying = isPlaying,
                     centerActive = false,
+                    dark = !immersive,
                     onRotate = { steps ->
-                        if (items.isNotEmpty()) {
+                        if (node is WheelNode.Search && searchPhase == 0) {
+                            val n = searchChars.length
+                            searchChar = ((searchChar + steps) % n + n) % n
+                        } else if (items.isNotEmpty()) {
                             selected = (selected + steps).coerceIn(0, items.lastIndex)
                         }
                     },
@@ -304,9 +335,9 @@ internal fun WheelHome(
                     onNext = { PlayerController.next() },
                     onRewind = { PlayerController.seekTo((PlayerController.currentPositionMs() - 5_000L).coerceAtLeast(0)) },
                     onForward = { PlayerController.seekTo(PlayerController.currentPositionMs() + 5_000L) },
-                    onMenu = { pop() },
+                    onMenu = { onWheelMenu() },
                     onMenuHome = { home() },
-                    onConfirm = { confirm(items.getOrNull(selected)) }
+                    onConfirm = { onWheelConfirm() }
                 )
             }
         }
@@ -388,6 +419,8 @@ private fun buildRoot(data: SourceBrowserData): List<WheelItem> {
     if (has(LibraryTabs.GENRES) && data.supportsGenres) out += WheelItem.Op(WheelNode.Genres, "风格", "风格 / 流派", null)
     if (has(LibraryTabs.ROAM) && data.supportsRoam) out += WheelItem.Action("roam", "漫游", "随机播放全库", Icons.Default.Shuffle)
     if (has(LibraryTabs.SEARCH)) out += WheelItem.Action("search", "搜索", "查找歌曲", Icons.Default.Search)
+    // 设置也作为普通条目放进滚轮列表——首页顶栏不放任何可点按钮（纯滚轮交互）
+    out += WheelItem.Action("settings", "设置", "主题 / 音源 / 音质", Icons.Default.Settings)
     return out
 }
 
@@ -425,9 +458,7 @@ private fun WheelItem.subtitle(): String = when (this) {
 private fun WheelList(
     items: List<WheelItem>,
     selected: Int,
-    immersive: Boolean,
-    onSelect: (Int) -> Unit,
-    onConfirm: () -> Unit
+    immersive: Boolean
 ) {
     val listState = rememberLazyListState()
     // 选中项变化时自动滚到可视区中央
@@ -455,7 +486,6 @@ private fun WheelList(
                             else Color.Transparent,
                             RoundedCornerShape(12.dp)
                         )
-                        .clickable { onSelect(i) }
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -539,10 +569,7 @@ private fun CategoryIcon(node: WheelNode, selected: Boolean, fg: Color) {
 @Composable
 private fun CoverFlowWheel(
     items: List<WheelItem>,
-    selected: Int,
-    onSelect: (Int) -> Unit,
-    onConfirm: () -> Unit,
-    onSearch: () -> Unit
+    selected: Int
 ) {
     val rowState = rememberLazyListState()
     LaunchedEffect(selected) {
@@ -574,8 +601,7 @@ private fun CoverFlowWheel(
                             scaleY = s
                             alpha = (1f - abs(norm) * 0.5f).coerceIn(0.15f, 1f)
                             cameraDistance = 14f * density
-                        }
-                        .clickable { if (sel) onConfirm() else onSelect(i) },
+                        },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
@@ -620,5 +646,93 @@ private fun CoverFlowWheel(
                 }
             }
         }
+    }
+}
+
+// ==================== 搜索：滚轮字母盘（纯转轮输入，无软键盘、无点击） ====================
+
+/**
+ * iPod 式搜索字母盘：把当前输入 query、正在选中的字符、以及一条字母轨道画在「屏幕」上。
+ * 转动滚轮移动光标、中心键确认、MENU 退格——整块区域没有任何可点击控件。
+ */
+@Composable
+private fun SearchWheelPad(
+    query: String,
+    chars: String,
+    charIndex: Int,
+    dark: Boolean
+) {
+    val fg = if (dark) MaterialTheme.colorScheme.onBackground else Color.White
+    val accent = MaterialTheme.colorScheme.primary
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(Modifier.height(12.dp))
+        Text("搜索", style = MaterialTheme.typography.labelMedium, color = fg.copy(alpha = 0.6f))
+        Spacer(Modifier.height(10.dp))
+        // 已输入的关键词（带光标下划线），没有输入时给占位提示
+        Text(
+            if (query.isEmpty()) "转动滚轮输入关键词" else query,
+            style = MaterialTheme.typography.headlineSmall,
+            color = if (query.isEmpty()) fg.copy(alpha = 0.4f) else fg,
+            maxLines = 2,
+            textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(6.dp))
+        Box(
+            Modifier
+                .width(120.dp)
+                .height(2.dp)
+                .background(accent)
+        )
+        Spacer(Modifier.height(28.dp))
+        // 当前选中的字符——大字显示，一眼知道中心键会输入什么
+        val cur = chars[charIndex.coerceIn(chars.indices)]
+        val label = when (cur) {
+            '⌫' -> "退格"
+            '✓' -> "完成"
+            ' ' -> "空格"
+            else -> cur.toString()
+        }
+        Text(
+            label,
+            style = MaterialTheme.typography.displayMedium,
+            color = accent,
+            textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(6.dp))
+        // 字母轨道：高亮当前位置，左右各显示一段上下文
+        val ctx = 6
+        val start = (charIndex - ctx).coerceAtLeast(0)
+        val end = (charIndex + ctx + 1).coerceAtMost(chars.length)
+        val window = chars.substring(start, end)
+        val offsetInWindow = charIndex - start
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+            window.forEachIndexed { i, c ->
+                val isCur = i == offsetInWindow
+                Text(
+                    when (c) {
+                        '⌫' -> "←"
+                        '✓' -> "✓"
+                        ' ' -> "_"
+                        else -> c.toString()
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isCur) accent else fg.copy(alpha = 0.35f),
+                    fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
+                    modifier = Modifier.padding(horizontal = 1.dp)
+                )
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        Text(
+            "滚轮选字符 · 中心键确认 · MENU 退格 / 看好结果后按 ✓",
+            style = MaterialTheme.typography.labelSmall,
+            color = fg.copy(alpha = 0.5f),
+            textAlign = TextAlign.Center
+        )
     }
 }

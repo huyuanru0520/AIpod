@@ -67,6 +67,8 @@ fun ClickWheel(
     diameter: Dp,
     isPlaying: Boolean,
     centerActive: Boolean = false,
+    /** 轮体所在背景是否为暗色：播放页是暗色封面传 true，首页跟随明暗主题。图标/描边据此反色。 */
+    dark: Boolean = true,
     onRotate: (Int) -> Unit,
     onPlayPause: () -> Unit,
     onPrevious: () -> Unit,
@@ -100,11 +102,12 @@ fun ClickWheel(
         Canvas(Modifier.fillMaxSize()) {
             val r = minOf(size.width, size.height) / 2f
             val c = center
+            val shadowA = if (dark) 0.42f else 0.20f
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        Color.Black.copy(alpha = 0.42f),
-                        Color.Black.copy(alpha = 0.16f),
+                        Color.Black.copy(alpha = shadowA),
+                        Color.Black.copy(alpha = shadowA * 0.38f),
                         Color.Transparent
                     ),
                     center = Offset(c.x, c.y + r * 0.12f),
@@ -205,17 +208,20 @@ fun ClickWheel(
                 }
         ) {
             val d = maxWidth
+            // 轮体上的文字/图标颜色：暗底用白、浅底用深灰，避免浅色模式白底白字。
+            val onColor = if (dark) Color.White else Color(0xFF2B2B30)
+            val onStrong = if (dark) Color.White else Color(0xFF1A1A1F)
             GlassSurface(
                 modifier = Modifier.fillMaxSize(),
                 shape = CircleShape,
                 tint = Color.White,
-                tintAlpha = 0.09f,
+                tintAlpha = if (dark) 0.09f else 0.46f,
                 elevation = 0.dp,
-                forceDark = true
+                forceDark = dark
             ) {
                 Text(
                     "MENU",
-                    color = Color.White.copy(alpha = 0.90f),
+                    color = onColor.copy(alpha = 0.90f),
                     fontSize = (d.value * 0.040f).sp,
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = 1.sp,
@@ -226,7 +232,7 @@ fun ClickWheel(
                 Icon(
                     Icons.Default.SkipPrevious,
                     contentDescription = "上一首 / 长按快退",
-                    tint = Color.White.copy(alpha = 0.95f),
+                    tint = onColor.copy(alpha = 0.95f),
                     modifier = Modifier
                         .align(Alignment.CenterStart)
                         .padding(start = d * 0.105f)
@@ -235,7 +241,7 @@ fun ClickWheel(
                 Icon(
                     Icons.Default.SkipNext,
                     contentDescription = "下一首 / 长按快进",
-                    tint = Color.White.copy(alpha = 0.95f),
+                    tint = onColor.copy(alpha = 0.95f),
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .padding(end = d * 0.105f)
@@ -252,12 +258,13 @@ fun ClickWheel(
                     Icon(
                         if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (isPlaying) "暂停" else "播放",
-                        tint = Color.White,
+                        tint = onStrong,
                         modifier = Modifier.size(d * 0.088f)
                     )
                 }
 
-                // 中心 Home 键：上缘阴影、下缘高光，做成 iTouch 4 那种内凹，而不是凸起的玻璃珠
+                // 中心 Home 键：上缘阴影、下缘高光，做成 iTouch 4 那种内凹，而不是凸起的玻璃珠。
+                // 浅色模式降低黑影不透明度、提高下缘白光，避免深灰圆斑糊在白轮体上。
                 val insetTop = if (centerActive) 0.58f else 0.42f
                 Box(
                     Modifier
@@ -267,11 +274,11 @@ fun ClickWheel(
                         .clip(CircleShape)
                         .background(
                             Brush.verticalGradient(
-                                0f to Color.Black.copy(alpha = insetTop),
-                                1f to Color.White.copy(alpha = 0.14f)
+                                0f to Color.Black.copy(alpha = if (dark) insetTop else insetTop * 0.55f),
+                                1f to Color.White.copy(alpha = if (dark) 0.14f else 0.85f)
                             )
                         )
-                        .border(1.dp, Color.White.copy(alpha = 0.18f), CircleShape),
+                        .border(1.dp, Color.White.copy(alpha = if (dark) 0.18f else 0.9f), CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     Box(
@@ -280,7 +287,10 @@ fun ClickWheel(
                             .clip(CircleShape)
                             .background(
                                 Brush.radialGradient(
-                                    listOf(Color.Black.copy(alpha = 0.20f), Color.Transparent)
+                                    listOf(
+                                        Color.Black.copy(alpha = if (dark) 0.20f else 0.10f),
+                                        Color.Transparent
+                                    )
                                 )
                             )
                     )

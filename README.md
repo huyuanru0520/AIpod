@@ -10,7 +10,7 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.24-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material3-4285F4?logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![Media3](https://img.shields.io/badge/Media3-1.5.1-FF6F00)](https://developer.android.com/media/media3)
-[![Version](https://img.shields.io/badge/version-2.1.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 </div>
@@ -28,7 +28,7 @@ Matrix Music 不建索引库、不依赖服务端插件，直接用 WebDAV 协�
 | 模块 | 说明 |
 | --- | --- |
 | **音源** | WebDAV（Basic / 匿名）、飞牛 FnOS 音乐（账号登录、多线路回退）；同一时刻启用一种，设置里切换 |
-| **媒体库** | **iPod 式滚轮首页**：转轮上下选、中心键进入、MENU 返回，第一屏即滚轮选择；歌曲 / 专辑 / 歌手 / 歌单 / 文件夹 / 风格 / 漫游 / 搜索层级浏览，栏目可在设置里勾选并拖动顺序 |
+| **媒体库** | **纯 iPod 模拟器首页**：滚轮上方一整块「屏幕」，列表（含设置 / 歌单）全部在里面；没有底部 Dock、没有正在播放横条、没有任何点击手势，唯一交互是转轮——转动选择、中心键确认、MENU 返回。搜索用滚轮字母盘输入，不用软键盘 |
 | **飞牛分类** | 风格直接读服务端 `/genre/list`；文件夹用 `audioSpec.path` 本地建树；漫游为全库随机流 |
 | **扫描** | 四档节奏（温和 250ms·3 路 → 极速 0ms·32 路），STRM 场景可全速；结果落盘缓存，冷启动秒开 |
 | **线路** | 主备地址自动切换；切换时直接改写索引里的地址，不重新扫描，正在播的歌也会自动换线重试 |
