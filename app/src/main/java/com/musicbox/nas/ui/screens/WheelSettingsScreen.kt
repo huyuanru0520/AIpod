@@ -88,6 +88,7 @@ import com.musicbox.nas.player.PlayerController
 import com.musicbox.nas.ui.components.ClickWheel
 import com.musicbox.nas.ui.components.clearCoverCache
 import com.musicbox.nas.ui.components.coverCacheSizeBytes
+import com.musicbox.nas.ui.components.fadeEdges
 import com.musicbox.nas.ui.components.fadeInList
 import com.musicbox.nas.ui.components.glassHighlight
 import com.musicbox.nas.ui.components.rememberCoverBitmap
@@ -392,8 +393,8 @@ fun WheelSettingsScreen(navController: NavController) {
                 }
             }
 
-            // 转轮：唯一交互
-            Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 10.dp), contentAlignment = Alignment.Center) {
+            // 转轮：与首页同步——上移到显示区与屏幕底部之间（bottom 64dp）
+            Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 64.dp), contentAlignment = Alignment.Center) {
                 ClickWheel(
                     diameter = 264.dp,
                     isPlaying = isPlaying,
@@ -530,7 +531,7 @@ private fun SettingsList(items: List<SettingItem>, selected: Int, showDescriptio
     val rowShape = RoundedCornerShape(14.dp)
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize().fadeInList(),
+        modifier = Modifier.fillMaxSize().fadeInList().fadeEdges(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
         contentPadding = PaddingValues(vertical = 24.dp)
     ) {

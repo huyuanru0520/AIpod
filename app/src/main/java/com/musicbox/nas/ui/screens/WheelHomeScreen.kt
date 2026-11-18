@@ -77,6 +77,7 @@ import com.musicbox.nas.data.Track
 import com.musicbox.nas.player.PlayerController
 import com.musicbox.nas.ui.components.ClickWheel
 import com.musicbox.nas.ui.components.CoverImage
+import com.musicbox.nas.ui.components.fadeEdges
 import com.musicbox.nas.ui.components.fadeInList
 import com.musicbox.nas.ui.components.glassHighlight
 import com.musicbox.nas.ui.components.rememberCoverBitmap
@@ -667,7 +668,7 @@ private fun WheelList(
         val rowShape = RoundedCornerShape(14.dp)
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize().fadeInList(),
+            modifier = Modifier.fillMaxSize().fadeInList().fadeEdges(),
             verticalArrangement = Arrangement.spacedBy(4.dp),
             contentPadding = PaddingValues(vertical = 24.dp)
         ) {

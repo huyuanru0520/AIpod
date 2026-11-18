@@ -8,9 +8,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 
 /**
@@ -65,3 +69,33 @@ fun Modifier.fadeInList(
     )
     return this.alpha(a)
 }
+
+/**
+ * 列表上下边缘淡入淡出：把被显示区裁切的行用 alpha 渐变隐去，而不是硬生生切断。
+ * 效果类似 Apple Music 歌词的边缘羽化——顶部/底部的行越靠近边界越透明，弱化显示边界，
+ * 让列表像是「浮」在背景上、从虚空中滚动出来。
+ *
+ * 实现：先把内容画到离屏层，再用一条「两端透明、中间不透明」的竖向渐变以 DstIn
+ * 混合，只保留中间的 alpha，边缘自然淡出（不覆盖任何底色，背景是什么都能融合）。
+ *
+ * @param fade 边缘淡出宽度占整体高度的比例（0.06f ≈ 顶部/底部各 6%）
+ */
+fun Modifier.fadeEdges(fade: Float = 0.12f): Modifier = this
+    .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+    .drawWithContent {
+        val f = fade.coerceIn(0f, 0.45f)
+        drawContent()
+        drawRect(
+            brush = Brush.verticalGradient(
+                colorStops = arrayOf(
+                    0f to Color.Transparent,
+                    f to Color.Black,
+                    1f - f to Color.Black,
+                    1f to Color.Transparent
+                ),
+                startY = 0f,
+                endY = size.height
+            ),
+            blendMode = BlendMode.DstIn
+        )
+    }
