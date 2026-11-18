@@ -37,7 +37,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -72,9 +71,8 @@ import com.musicbox.nas.ui.components.GlassMiniPlayer
 import com.musicbox.nas.ui.components.LiquidGlassDock
 import com.musicbox.nas.ui.components.MiniPlayer
 import com.musicbox.nas.ui.screens.LibraryScreen
-import com.musicbox.nas.ui.screens.PlaylistsScreen
 import com.musicbox.nas.ui.screens.PlayerScreen
-import com.musicbox.nas.ui.screens.SettingsScreen
+import com.musicbox.nas.ui.screens.WheelSettingsScreen
 import com.musicbox.nas.ui.theme.MusicBoxTheme
 import com.musicbox.nas.util.CrashLogger
 import kotlinx.coroutines.Dispatchers
@@ -460,10 +458,10 @@ private fun AppRoot() {
         // 顶部也就不会残留一条与状态栏等高的黑带。
         // 悬浮外壳（Dock + 迷你播放器）浮在内容之上，内容区按实测高度留出空位，
         // 这样列表最后一项不会被 Dock 盖住，Dock 也始终悬在底部而不是挤占布局。
-        // library 首页是纯粹的 iPod 模拟器：滚轮上方那一块就是屏幕，没有 Dock、没有
-        // 「正在播放」横条，唯一交互是转轮，因此首页不显示外壳。设置 / 歌单等二级页保留
-        // Dock 作为返回手段（它们是普通 Material 页面，需要触摸操作）。
-        val shellVisible = !onPlayer && !fullScreen && route != "library"
+        // library 首页与 settings 设置页都是纯 iPod 模拟器：滚轮上方那一块就是屏幕，
+        // 没有 Dock、没有「正在播放」横条，唯一交互是转轮，因此这两页都不显示外壳。
+        // 歌单页已砍掉，播放页全屏沉浸。当前所有路由都不需要底部 Dock。
+        val shellVisible = false && !onPlayer && !fullScreen
         var shellHeight by remember { mutableStateOf(0.dp) }
         val density = LocalDensity.current
 
@@ -498,8 +496,7 @@ private fun AppRoot() {
                     popExitTransition = { fadeOut(tween(140)) }
                 ) {
                     composable("library") { LibraryScreen(navController) }
-                    composable("playlists") { PlaylistsScreen(navController) }
-                    composable("settings") { SettingsScreen(navController) }
+                    composable("settings") { WheelSettingsScreen(navController) }
                     composable(
                         "player",
                         enterTransition = {
@@ -692,7 +689,6 @@ private fun ShellBottom(navController: NavController, route: String?) {
 
     val items = listOf(
         DockItem("library", "曲库", Icons.Default.LibraryMusic),
-        DockItem("playlists", "歌单", Icons.Default.QueueMusic),
         DockItem("settings", "设置", Icons.Default.Settings)
     )
 

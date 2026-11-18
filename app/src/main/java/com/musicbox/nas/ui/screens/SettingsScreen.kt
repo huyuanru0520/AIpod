@@ -798,7 +798,7 @@ private fun ThemeMode.label() = when (this) {
 // ==================== 连接信息编辑表单（只在设置页出现） ====================
 
 @Composable
-private fun WebDavConnectionForm(
+internal fun WebDavConnectionForm(
     prefill: WebDavConnection?,
     onSaved: () -> Unit,
     onCancel: () -> Unit
@@ -899,7 +899,7 @@ private fun WebDavConnectionForm(
 }
 
 @Composable
-private fun FnOSConnectionForm(
+internal fun FnOSConnectionForm(
     prefill: FnosConnection?,
     onSaved: () -> Unit,
     onCancel: () -> Unit

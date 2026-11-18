@@ -1,6 +1,7 @@
 package com.musicbox.nas.ui.screens
 
 import android.content.res.Configuration
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -51,7 +53,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -93,6 +98,11 @@ internal fun WheelHome(
 ) {
     val isLandscape =
         LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    // 当前正在播放的曲目：主页背景取它的封面做高斯模糊；无播放时回退到苹果红模糊。
+    val queue by PlayerController.queue.collectAsState()
+    val currentIndex by PlayerController.currentIndex.collectAsState()
+    val currentTrack = queue.getOrNull(currentIndex)
 
     // 浏览栈：每一层是一个 WheelNode，中心键 push，MENU pop。
     var stack by remember(data) { mutableStateOf<List<WheelNode>>(listOf(WheelNode.Root)) }
@@ -156,6 +166,7 @@ internal fun WheelHome(
             }
             is WheelItem.Action -> {
                 when (item.key) {
+                    "now_playing" -> navController.navigate("player")
                     "settings" -> navController.navigate("settings")
                     "roam" -> scope.launch {
                         val list = data.loadRoam()
@@ -210,7 +221,8 @@ internal fun WheelHome(
 
     if (isLandscape) {
         // ============ 横屏：全屏 CoverFlow，无滚轮，点击进专辑列表，左上角返回 ============
-        Box(Modifier.fillMaxSize().background(appleRed)) {
+        Box(Modifier.fillMaxSize()) {
+            WheelBackdrop(current = currentTrack, red = appleRed)
             when {
                 loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                     CircularProgressIndicator(color = Color.White)
@@ -302,8 +314,9 @@ internal fun WheelHome(
         return
     }
 
-    // ============ 竖屏：红色底 + 屏幕列表 + 滚轮 ============
-    Box(Modifier.fillMaxSize().background(appleRed)) {
+    // ============ 竖屏：动态背景（播放封面模糊 / 苹果红）+ 屏幕列表 + 滚轮 ============
+    Box(Modifier.fillMaxSize()) {
+        WheelBackdrop(current = currentTrack, red = appleRed)
         Column(Modifier.fillMaxSize()) {
             // 顶栏只是「屏幕」上的一块静态标题，没有任何按钮——首页唯一交互是转轮。
             Row(
@@ -353,7 +366,8 @@ internal fun WheelHome(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp)
                     .clip(RoundedCornerShape(18.dp))
-                    .background(appleRed.copy(alpha = 0.55f))
+                    // 半透明玻璃层：既能透出底下的封面模糊/红色光晕，又让列表区有「屏幕」凹陷感
+                    .background(Color.Black.copy(alpha = 0.16f))
             ) {
                 when {
                     // 搜索输入态：屏幕就是一块字母盘，转动滚轮选字母，中心键确认，MENU 退格
@@ -411,6 +425,52 @@ internal fun WheelHome(
                     onMenu = { onWheelMenu() },
                     onMenuHome = { home() },
                     onConfirm = { onWheelConfirm() }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 主页动态背景：
+ * - 有正在播放曲目 → 取该曲目封面做真高斯模糊铺满，再叠一层半透明暗色保证白字可读；
+ * - 无正在播放 → 苹果音乐红的径向渐变（中心亮、边缘暗），模拟「红色模糊光晕」。
+ *
+ * 封面通过 [rememberCoverBitmap] 走同一份 LRU 缓存，加载完成自动刷新；不订阅进度流，
+ * 因此切歌之外不会因每秒进度更新而重组。
+ */
+@Composable
+private fun WheelBackdrop(current: com.musicbox.nas.data.Track?, red: Color) {
+    val bmp = rememberCoverBitmap(current?.coverUrl, current?.embeddedAudioUrl)
+    Box(Modifier.fillMaxSize()) {
+        if (bmp != null) {
+            Image(
+                bitmap = bmp,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { scaleX = 1.15f; scaleY = 1.15f }
+                    .blur(32.dp)
+            )
+            // 暗化蒙层：让白色文字与选中高亮在任意封面颜色上都清晰
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.42f)))
+        } else {
+            // 无播放：苹果红径向渐变 + 轻微模糊，得到柔和光晕而非硬边纯色。
+            Canvas(Modifier.fillMaxSize()) {
+                val w = size.width
+                val h = size.height
+                drawRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            red.copy(alpha = 0.96f),
+                            red,
+                            Color(0xFF8E1024),
+                            Color(0xFF4E0814)
+                        ),
+                        center = Offset(w * 0.42f, h * 0.30f),
+                        radius = maxOf(w, h) * 0.95f
+                    )
                 )
             }
         }
@@ -484,6 +544,11 @@ private fun buildRoot(data: SourceBrowserData): List<WheelItem> {
     val out = mutableListOf<WheelItem>()
     val visible = MusicBoxApp.instance.visibleTabs.value
     fun has(key: String) = key in visible
+    // 置顶「正在播放」：任何音源、任何栏目配置下都固定出现在第一项。
+    val q = PlayerController.queue.value
+    val cur = q.getOrNull(PlayerController.currentIndex.value)
+    val nowSub = if (cur != null) "${cur.title} · ${cur.artist}" else "打开播放器"
+    out += WheelItem.Action("now_playing", "正在播放", nowSub, Icons.Default.PlayArrow)
     if (has(LibraryTabs.SONGS)) out += WheelItem.Op(WheelNode.Songs, "歌曲", "全部曲目", null)
     if (has(LibraryTabs.ALBUMS)) out += WheelItem.Op(WheelNode.Albums, "专辑", "按专辑浏览", null)
     if (has(LibraryTabs.ARTISTS)) out += WheelItem.Op(WheelNode.Artists, "歌手", "按歌手浏览", null)
