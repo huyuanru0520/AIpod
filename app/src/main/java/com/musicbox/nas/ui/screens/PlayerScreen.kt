@@ -188,8 +188,8 @@ fun PlayerScreen(navController: NavController) {
             var showLyrics by remember { mutableStateOf(false) }
             // 歌词滚动由外部驱动：滚轮在歌词界面直接滚动歌词（见 onRotate）。
             val lyricsScroll = rememberScrollState()
-            // 进度模式：封面界面按中心键切换，滚轮调进度；只在原进度条上加粗红色标记，
-            // 不再弹出独立 HUD。歌词界面滚轮只滚歌词。
+            // 进度模式：封面 / 歌词界面短按中心键切换，滚轮调歌曲进度；只在原进度条上加粗红色标记，
+            // 不再弹出独立 HUD。非进度模式下歌词界面滚轮滚歌词、封面界面滚轮调音量。
             val body = when {
                 menuOpen -> "menu"
                 showLyrics -> "lyrics"
@@ -206,7 +206,6 @@ fun PlayerScreen(navController: NavController) {
                 IpodTopBar(
                     track = current,
                     showLyrics = showLyrics,
-                    onToggleLyrics = { showLyrics = !showLyrics; if (showLyrics) progressMode = false },
                     onQueueClick = { showQueue = true },
                     onBack = { navController.popBackStack() }
                 )
@@ -276,30 +275,16 @@ fun PlayerScreen(navController: NavController) {
                                     currentIndex = idx,
                                     onSelect = { selectedQueueIndex = it }
                                 )
-                                "lyrics" -> Box(Modifier.fillMaxSize()) {
-                                    LyricsView(
-                                        current = c,
-                                        textColor = Color.White.copy(alpha = 0.55f),
-                                        highlightColor = Color.White,
-                                        contentVertical = 0.dp,
-                                        largeText = true,
-                                        fadeByDistance = true,
-                                        scrollState = lyricsScroll
-                                    )
-                                    Text(
-                                        "封面",
-                                        color = Color.White.copy(alpha = 0.85f),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        modifier = Modifier
-                                            .align(Alignment.TopEnd)
-                                            .padding(top = 2.dp, end = 20.dp)
-                                            .clip(RoundedCornerShape(20.dp))
-                                            .background(Color.White.copy(alpha = 0.14f))
-                                            .clickable { showLyrics = false; progressMode = false }
-                                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                                    )
-                                }
-                                else -> NowPlayingArt(track = c, onShowLyrics = { showLyrics = true; progressMode = false })
+                                "lyrics" -> LyricsView(
+                                    current = c,
+                                    textColor = Color.White.copy(alpha = 0.55f),
+                                    highlightColor = Color.White,
+                                    contentVertical = 0.dp,
+                                    largeText = true,
+                                    fadeByDistance = true,
+                                    scrollState = lyricsScroll
+                                )
+                                else -> NowPlayingArt(track = c)
                             }
                         }
                     }
@@ -333,7 +318,7 @@ fun PlayerScreen(navController: NavController) {
                                 thumbColor = BrandRed,
                                 inactiveColor = Color.White.copy(alpha = 0.22f),
                                 labelColor = Color.White.copy(alpha = 0.6f),
-                                emphasized = progressMode && !showLyrics,
+                                emphasized = progressMode,
                                 onSeek = { PlayerController.seekTo(it) }
                             )
                         }
@@ -350,11 +335,15 @@ fun PlayerScreen(navController: NavController) {
                                     selectedQueueIndex =
                                         (selectedQueueIndex + steps).coerceIn(0, queue.lastIndex.coerceAtLeast(0))
                                 }
+                                progressMode -> {
+                                    // 进度模式优先：封面 / 歌词界面按了中心键进进度模式后，
+                                    // 滚轮一律快进快退歌曲，而不是继续滚歌词（需求2）。
+                                    seekBy(steps * 5_000L)
+                                }
                                 showLyrics -> {
-                                    // 歌词界面：滚轮直接滚动歌词（正转看后面的歌词）
+                                    // 歌词界面（非进度模式）：滚轮直接滚动歌词
                                     scope.launch { lyricsScroll.scrollBy(steps * 120f) }
                                 }
-                                progressMode -> seekBy(steps * 5_000L)
                                 else -> {
                                     val next = MusicBoxApp.instance.volume.value + steps * 0.04f
                                     volumeHint = true
@@ -377,9 +366,14 @@ fun PlayerScreen(navController: NavController) {
                                         menuOpen = false
                                     }
                                 }
-                                showLyrics -> showLyrics = false
+                                // 短按中心键：封面 / 歌词界面统一切换进度模式
                                 else -> progressMode = !progressMode
                             }
+                        },
+                        // 长按中心键：切换歌词界面（取消原顶栏歌词按钮）
+                        onCenterLongPress = {
+                            showLyrics = !showLyrics
+                            progressMode = false
                         },
                         // 略微上移，避免整块压在屏幕底部
                         modifier = Modifier
@@ -527,14 +521,13 @@ private fun WheelProgressHud(durationMs: Long) {
 }
 
 /**
- * 播放页顶栏：返回 / 「正在播放」/ 歌词切换 / 队列 / 更多。
- * 不再显示小封面与歌名——它们已经放大到中间区域，顶栏只负责导航与杂项。
+ * 播放页顶栏：返回 /「正在播放」/ 队列 / 更多。
+ * 不再显示小封面、歌名与歌词切换按钮——歌词改由长按中心键切换。
  */
 @Composable
 private fun IpodTopBar(
     track: Track?,
     showLyrics: Boolean,
-    onToggleLyrics: () -> Unit,
     onQueueClick: () -> Unit,
     onBack: () -> Unit
 ) {
@@ -560,13 +553,6 @@ private fun IpodTopBar(
                 if (showLyrics) "歌词" else "iPod 转轮",
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.55f)
-            )
-        }
-        IconButton(onClick = onToggleLyrics) {
-            Icon(
-                if (showLyrics) Icons.Default.Album else Icons.Default.Subject,
-                contentDescription = if (showLyrics) "显示封面" else "显示歌词",
-                tint = Color.White
             )
         }
         IconButton(onClick = onQueueClick) {
@@ -633,13 +619,13 @@ private fun IpodTopBar(
 }
 
 /**
- * 中间主区域：大封面 + 歌名 / 歌手。轻点封面切到歌词页。
+ * 中间主区域：大封面 + 歌名 / 歌手。
+ * 歌词页一律通过长按中心键切换，封面不再可点，避免与「短按中心键切进度」的滚轮交互冲突。
  * 封面尺寸取「可用宽」与「可用高 - 文字区」的较小值，小屏上不会把歌名挤出去。
  */
 @Composable
 private fun NowPlayingArt(
-    track: Track,
-    onShowLyrics: () -> Unit
+    track: Track
 ) {
     BoxWithConstraints(
         Modifier
@@ -657,7 +643,6 @@ private fun NowPlayingArt(
                     .size(art)
                     .shadow(20.dp, RoundedCornerShape(14.dp))
                     .clip(RoundedCornerShape(14.dp))
-                    .clickable { onShowLyrics() }
             ) {
                 CoverImage(
                     track.coverUrl,
@@ -692,7 +677,7 @@ private fun NowPlayingArt(
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                "轻点封面查看歌词",
+                "长按中心键查看歌词",
                 fontSize = 10.sp,
                 color = Color.White.copy(alpha = 0.35f)
             )

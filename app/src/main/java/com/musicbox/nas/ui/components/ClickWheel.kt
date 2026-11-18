@@ -57,7 +57,7 @@ import kotlin.math.hypot
  * - 短按左 / 右：上一首 / 下一首；长按：连续快退 / 快进，只在按下瞬间震一次；
  * - 短按 MENU：页面内打开 / 关闭播放队列；长按 MENU：回曲库根；
  * - 下键：播放 / 暂停；
- * - 中心：iPod touch 4 Home 键式**内凹**按钮，短按切换歌曲进度模式。
+ * - 中心：iPod touch 4 Home 键式**内凹**按钮，短按切换歌曲进度模式，长按切换歌词界面。
  *
  * 轮体投影用自绘圆形径向渐变，不用 Modifier.shadow——后者在圆形上会出现明显的多边形
  * （六边形）轮廓，为了那点性能把玻璃质感毁掉不值得。
@@ -78,6 +78,8 @@ fun ClickWheel(
     onMenu: () -> Unit,
     onMenuHome: () -> Unit,
     onConfirm: () -> Unit,
+    /** 中心键长按：播放页用它切换歌词界面；不传则无行为。 */
+    onCenterLongPress: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -168,21 +170,33 @@ fun ClickWheel(
                             if (zone == WheelZone.CENTER) centerDown = true
                             if (zone == WheelZone.BOTTOM) bottomDown = true
                             var longJob: Job? = null
-                            if (zone == WheelZone.LEFT || zone == WheelZone.RIGHT || zone == WheelZone.TOP) {
-                                longJob = scope.launch {
-                                    delay(LONG_PRESS_MS)
-                                    longFired = true
-                                    Haptics.click(context, view) // 长按只震一次，之后连续动作不再震
-                                    while (isActive) {
-                                        when (zone) {
-                                            WheelZone.LEFT -> onRewind()
-                                            WheelZone.RIGHT -> onForward()
-                                            WheelZone.TOP -> onMenuHome()
-                                            else -> Unit
+                            when (zone) {
+                                WheelZone.LEFT, WheelZone.RIGHT, WheelZone.TOP -> {
+                                    longJob = scope.launch {
+                                        delay(LONG_PRESS_MS)
+                                        longFired = true
+                                        Haptics.click(context, view) // 长按只震一次，之后连续动作不再震
+                                        while (isActive) {
+                                            when (zone) {
+                                                WheelZone.LEFT -> onRewind()
+                                                WheelZone.RIGHT -> onForward()
+                                                WheelZone.TOP -> onMenuHome()
+                                                else -> Unit
+                                            }
+                                            delay(REPEAT_MS)
                                         }
-                                        delay(REPEAT_MS)
                                     }
                                 }
+                                WheelZone.CENTER -> {
+                                    // 中心键长按：只触发一次（切换歌词），不循环
+                                    longJob = scope.launch {
+                                        delay(LONG_PRESS_MS)
+                                        longFired = true
+                                        Haptics.click(context, view)
+                                        onCenterLongPress()
+                                    }
+                                }
+                                else -> Unit
                             }
                             tryAwaitRelease()
                             longJob?.cancel()

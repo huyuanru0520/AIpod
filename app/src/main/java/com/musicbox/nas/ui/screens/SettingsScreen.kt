@@ -820,7 +820,8 @@ internal fun WebDavConnectionForm(
     var error by rememberSaveable { mutableStateOf<String?>(null) }
     var loading by rememberSaveable { mutableStateOf(false) }
 
-        Column(Modifier.fillMaxWidth()) {
+    // 备用线路字段较多，小屏放不下：根布局可上下滚动，保证「备用连接」完整可见可填。
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
             Text("编辑 WebDAV 连接", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(8.dp))
             Row {
@@ -920,7 +921,8 @@ internal fun FnOSConnectionForm(
     var error by rememberSaveable { mutableStateOf<String?>(null) }
     var loading by rememberSaveable { mutableStateOf(false) }
 
-    Column(Modifier.fillMaxWidth()) {
+    // 备用线路字段较多，小屏放不下：根布局可上下滚动，保证「备用连接」完整可见可填。
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
         Text("编辑飞牛音乐登录", style = MaterialTheme.typography.titleSmall)
         Spacer(Modifier.height(8.dp))
         LabeledTextField("NAS 地址 / 域名", host) { host = it }
