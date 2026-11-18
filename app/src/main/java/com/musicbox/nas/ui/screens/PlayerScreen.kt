@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
@@ -41,6 +42,7 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Subject
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -71,6 +73,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -87,6 +90,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import androidx.navigation.NavController
 import com.musicbox.nas.MusicBoxApp
@@ -95,6 +99,7 @@ import com.musicbox.nas.data.SourceType
 import com.musicbox.nas.data.Track
 import com.musicbox.nas.player.PlayerController
 import com.musicbox.nas.ui.components.BareCover
+import com.musicbox.nas.ui.components.ClickWheel
 import com.musicbox.nas.ui.components.CoverImage
 import com.musicbox.nas.ui.components.HiResBadge
 import com.musicbox.nas.ui.components.rememberCoverBitmap
@@ -158,60 +163,110 @@ fun PlayerScreen(navController: NavController) {
         CoverBackdrop(current)
         // 播放页保留状态栏（见 MainActivity.keepStatusBarVisible）：内容从状态栏下方开始，
         // 但背景仍在 Box 里铺满整屏，状态栏透出的是封面模糊图而不是黑条。
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            // 顶部：小封面 + 歌名 / 歌手 + 队列 / 更多（参考 iOS 音乐，紧贴状态栏下方）
-            TrackHeader(
-                track = current,
-                onQueueClick = { showQueue = true },
-                onBack = { navController.popBackStack() }
-            )
+        //
+        // 竖屏布局：顶部信息条 → 中间「封面 / 歌词」→ 进度条 → iPod 点击转轮。
+        // 转轮的所有操作（转、按）都在 ClickWheel 内部完成，页面只负责把动作接到播放器。
+        BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {
+            // 转轮尺寸：宽度优先，同时给封面和进度条留出空间；小屏再按高度收一档
+            val wheel = minOf(maxWidth * 0.64f, maxHeight * 0.40f, 286.dp)
+            var showLyrics by remember { mutableStateOf(false) }
 
-            // 播放错误直接可见（错误码 + 描述），完整堆栈写入「下载」目录日志
-            if (playError != null) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.errorContainer)
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "播放失败：$playError\n完整堆栈见「下载」目录日志",
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(onClick = { PlayerController.clearError() }) {
-                        Icon(Icons.Default.Close, contentDescription = "关闭")
+            Column(Modifier.fillMaxSize().navigationBarsPadding()) {
+                IpodTopBar(
+                    track = current,
+                    showLyrics = showLyrics,
+                    onToggleLyrics = { showLyrics = !showLyrics },
+                    onQueueClick = { showQueue = true },
+                    onBack = { navController.popBackStack() }
+                )
+
+                // 播放错误直接可见（错误码 + 描述），完整堆栈写入「下载」目录日志
+                if (playError != null) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.errorContainer)
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "播放失败：$playError\n完整堆栈见「下载」目录日志",
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { PlayerController.clearError() }) {
+                            Icon(Icons.Default.Close, contentDescription = "关闭")
+                        }
                     }
                 }
-            }
 
-            if (current == null) {
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text("队列为空", color = Color.White.copy(alpha = 0.7f))
-                }
-            } else {
-                val c = current
-                // 歌词铺满中间区域：当前句始终垂直居中，其余句按距离渐隐（大字号）。
-                Box(Modifier.weight(1f).fillMaxWidth()) {
-                    LyricsView(
-                        current = c,
-                        textColor = Color.White.copy(alpha = 0.55f),
-                        highlightColor = Color.White,
-                        contentVertical = 0.dp,
-                        largeText = true,
-                        fadeByDistance = true
+                if (current == null) {
+                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text("队列为空", color = Color.White.copy(alpha = 0.7f))
+                    }
+                } else {
+                    val c = current
+                    // 中间区域：默认是专辑封面 + 歌名，轻点封面切到滚动歌词（转轮保持不动）
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        Crossfade(
+                            targetState = showLyrics,
+                            animationSpec = tween(durationMillis = 180),
+                            label = "ipodBody"
+                        ) { lyricsMode ->
+                            if (lyricsMode) {
+                                Box(Modifier.fillMaxSize()) {
+                                    LyricsView(
+                                        current = c,
+                                        textColor = Color.White.copy(alpha = 0.55f),
+                                        highlightColor = Color.White,
+                                        contentVertical = 0.dp,
+                                        largeText = true,
+                                        fadeByDistance = true
+                                    )
+                                    // 歌词页留一个返回封面的小胶囊，避免用户找不到路
+                                    Text(
+                                        "封面",
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(top = 2.dp, end = 20.dp)
+                                            .clip(RoundedCornerShape(20.dp))
+                                            .background(Color.White.copy(alpha = 0.14f))
+                                            .clickable { showLyrics = false }
+                                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                                    )
+                                }
+                            } else {
+                                NowPlayingArt(track = c, onShowLyrics = { showLyrics = true })
+                            }
+                        }
+                    }
+
+                    // 进度条：转轮上方一条细线 + 时间，拖动行为与之前一致（松手才 seek）
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
+                        SeekBar(
+                            duration = duration,
+                            inactiveColor = Color.White.copy(alpha = 0.22f),
+                            labelColor = Color.White.copy(alpha = 0.6f),
+                            onSeek = { PlayerController.seekTo(it) }
+                        )
+                    }
+                    Spacer(Modifier.height(2.dp))
+
+                    ClickWheel(
+                        diameter = wheel,
+                        isPlaying = isPlaying,
+                        onPlayPause = { if (isPlaying) PlayerController.pause() else PlayerController.play() },
+                        onPrevious = { PlayerController.previous() },
+                        onNext = { PlayerController.next() },
+                        onMenu = { navController.popBackStack() },
+                        onSelect = { showQueue = true },
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
                     )
+                    Spacer(Modifier.height(8.dp))
                 }
-
-                HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
-
-                BottomControls(
-                    track = c,
-                    duration = duration,
-                    isPlaying = isPlaying
-                )
             }
         }
     }
@@ -223,54 +278,48 @@ fun PlayerScreen(navController: NavController) {
     ) { showQueue = false }
 }
 
-/** 顶部歌曲信息条：小封面 + 标题 / 歌手 + 播放队列 + 更多（含查看大图、复制信息）。 */
+/**
+ * 播放页顶栏：返回 / 「正在播放」/ 歌词切换 / 队列 / 更多。
+ * 不再显示小封面与歌名——它们已经放大到中间区域，顶栏只负责导航与杂项。
+ */
 @Composable
-private fun TrackHeader(
+private fun IpodTopBar(
     track: Track?,
+    showLyrics: Boolean,
+    onToggleLyrics: () -> Unit,
     onQueueClick: () -> Unit,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier
+    onBack: () -> Unit
 ) {
     var menu by remember { mutableStateOf(false) }
     var showArt by remember { mutableStateOf(false) }
     val context = LocalContext.current
     Row(
-        modifier
+        Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+            .padding(start = 4.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (track != null) {
-            CoverImage(
-                track.coverUrl,
-                Modifier.size(48.dp).clip(RoundedCornerShape(6.dp)),
-                embeddedAudioUrl = track.embeddedAudioUrl
-            )
-            Spacer(Modifier.width(12.dp))
+        IconButton(onClick = onBack) {
+            Icon(Icons.Default.ArrowBack, contentDescription = "返回", tint = Color.White)
         }
-        // 歌名 / 歌手随切歌交叉淡入，避免文字"啪"地整块替换
-        Crossfade(
-            targetState = track,
-            animationSpec = tween(durationMillis = 200),
-            modifier = Modifier.weight(1f),
-            label = "trackHeader"
-        ) { t ->
-            Column(Modifier.fillMaxWidth()) {
-                Text(
-                    t?.title ?: "队列为空",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    t?.artist?.ifBlank { "未知歌手" } ?: "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.65f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+        Column(Modifier.weight(1f)) {
+            Text(
+                "正在播放",
+                style = MaterialTheme.typography.titleSmall,
+                color = Color.White
+            )
+            Text(
+                if (showLyrics) "歌词" else "iPod 转轮",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.55f)
+            )
+        }
+        IconButton(onClick = onToggleLyrics) {
+            Icon(
+                if (showLyrics) Icons.Default.Album else Icons.Default.Subject,
+                contentDescription = if (showLyrics) "显示封面" else "显示歌词",
+                tint = Color.White
+            )
         }
         IconButton(onClick = onQueueClick) {
             Icon(Icons.Default.QueueMusic, contentDescription = "播放队列", tint = Color.White)
@@ -313,7 +362,7 @@ private fun TrackHeader(
             }
         }
     }
-    // 整合后大封面不再常驻，但仍可从「更多」里全屏看一眼（纯图片、无边框）
+    // 大图预览（纯图片、无边框）
     if (showArt && track != null) {
         androidx.compose.ui.window.Dialog(onDismissRequest = { showArt = false }) {
             Box(
@@ -331,6 +380,74 @@ private fun TrackHeader(
                     contentDescription = track.title
                 )
             }
+        }
+    }
+}
+
+/**
+ * 中间主区域：大封面 + 歌名 / 歌手。轻点封面切到歌词页。
+ * 封面尺寸取「可用宽」与「可用高 - 文字区」的较小值，小屏上不会把歌名挤出去。
+ */
+@Composable
+private fun NowPlayingArt(
+    track: Track,
+    onShowLyrics: () -> Unit
+) {
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp)
+    ) {
+        val art = minOf(maxWidth, (maxHeight - 108.dp).coerceAtLeast(72.dp))
+        Column(
+            Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Box(
+                Modifier
+                    .size(art)
+                    .shadow(20.dp, RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { onShowLyrics() }
+            ) {
+                CoverImage(
+                    track.coverUrl,
+                    Modifier.fillMaxSize(),
+                    embeddedAudioUrl = track.embeddedAudioUrl
+                )
+            }
+            Spacer(Modifier.height(18.dp))
+            if (track.isHiRes || track.qualityLabel.isNotBlank()) {
+                HiResBadge(track, onDark = true)
+                Spacer(Modifier.height(6.dp))
+            }
+            Text(
+                track.title,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                track.artist.ifBlank { "未知歌手" },
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.65f),
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "轻点封面查看歌词",
+                fontSize = 10.sp,
+                color = Color.White.copy(alpha = 0.35f)
+            )
         }
     }
 }
@@ -362,81 +479,6 @@ private fun QueueHost(
                 onDismiss()
             }
         )
-    }
-}
-
-/**
- * 底部固定控制区：进度条 + 时间 + **只有** 上一首 / 播放暂停 / 下一首。
- * 随机、单曲循环、列表循环已移至「播放队列」列表页（见 [QueueSheet]）。
- *
- * 拖动进度条时只更新本地数值，松手才真正 seek，避免连续拖动网络流时反复重新请求。
- */
-@Composable
-private fun BottomControls(
-    track: Track,
-    duration: Long,
-    isPlaying: Boolean
-) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            // 播放页现在保留系统栏，导航栏会占掉底部一条：按钮必须避开它
-            .navigationBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 10.dp)
-    ) {
-        if (track.isHiRes || track.qualityLabel.isNotBlank()) {
-            HiResBadge(track, onDark = true)
-            Spacer(Modifier.height(6.dp))
-        }
-        SeekBar(
-            duration = duration,
-            inactiveColor = Color.White.copy(alpha = 0.22f),
-            labelColor = Color.White.copy(alpha = 0.6f),
-            onSeek = { PlayerController.seekTo(it) }
-        )
-        Spacer(Modifier.height(10.dp))
-
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            IconButton(onClick = { PlayerController.previous() }, modifier = Modifier.size(64.dp)) {
-                Icon(
-                    Icons.Default.SkipPrevious,
-                    contentDescription = "上一首",
-                    tint = Color.White,
-                    modifier = Modifier.size(40.dp)
-                )
-            }
-            IconButton(
-                onClick = { if (isPlaying) PlayerController.pause() else PlayerController.play() },
-                modifier = Modifier.size(72.dp)
-            ) {
-                // 图标淡入淡出切换，比直接替换更顺滑
-                Crossfade(
-                    targetState = isPlaying,
-                    animationSpec = tween(durationMillis = 140),
-                    label = "playIcon"
-                ) { playing ->
-                    Icon(
-                        if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (playing) "暂停" else "播放",
-                        tint = Color.White,
-                        modifier = Modifier.size(52.dp)
-                    )
-                }
-            }
-            IconButton(onClick = { PlayerController.next() }, modifier = Modifier.size(64.dp)) {
-                Icon(
-                    Icons.Default.SkipNext,
-                    contentDescription = "下一首",
-                    tint = Color.White,
-                    modifier = Modifier.size(40.dp)
-                )
-            }
-        }
-        Spacer(Modifier.height(8.dp))
     }
 }
 

@@ -326,8 +326,27 @@ object PlayerController {
 
     fun play() { runCatching { player?.play() }.onFailure { logCtrl("play", it) } }
     fun pause() { runCatching { player?.pause() }.onFailure { logCtrl("pause", it) } }
-    fun next() { runCatching { player?.seekToNextMediaItem() }.onFailure { logCtrl("next", it) } }
-    fun previous() { runCatching { player?.seekToPreviousMediaItem() }.onFailure { logCtrl("previous", it) } }
+    fun next() = skip(forward = true)
+    fun previous() = skip(forward = false)
+
+    /**
+     * 手动切歌：**无视单曲循环**。
+     *
+     * Media3 的 `seekToNextMediaItem()` 会遵守 repeat mode，单曲循环时会「切」回同一首，
+     * 表现为按钮 / 转轮转了却没反应。这里临时把模式切成列表循环，切完立刻还原原模式。
+     */
+    private fun skip(forward: Boolean) {
+        val p = player ?: return
+        runCatching {
+            val one = p.repeatMode == Player.REPEAT_MODE_ONE
+            if (one) p.repeatMode = Player.REPEAT_MODE_ALL
+            try {
+                if (forward) p.seekToNextMediaItem() else p.seekToPreviousMediaItem()
+            } finally {
+                if (one) p.repeatMode = Player.REPEAT_MODE_ONE
+            }
+        }.onFailure { logCtrl(if (forward) "next" else "previous", it) }
+    }
     fun seekTo(posMs: Long) { runCatching { player?.seekTo(posMs) }.onFailure { logCtrl("seekTo", it) } }
     fun setRepeat(mode: Int) { runCatching { player?.repeatMode = mode }.onFailure { logCtrl("setRepeat", it) } }
 
