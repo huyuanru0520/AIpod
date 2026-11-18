@@ -55,7 +55,7 @@ import kotlin.math.roundToInt
 /**
  * 透明玻璃 iPod 点击轮。
  *
- * - 转动：12° 一格，细密震动（无可见刻度线），具体行为由页面决定（音量 / 选歌 / 进度）；
+ * - 转动：18° 一格，细密震动（无可见刻度线），具体行为由页面决定（音量 / 选歌 / 进度）；
  * - 短按左 / 右：上一首 / 下一首；长按：连续快退 / 快进，只在按下瞬间震一次；
  * - 短按 MENU：页面内打开 / 关闭播放队列；长按 MENU：回曲库根；
  * - 下键：播放 / 暂停；
@@ -149,7 +149,7 @@ fun ClickWheel(
                     var onRing = false
                     // 加速度状态：连续快速转动时逐步提速，停手后回落到 1 格/项。
                     var velSteps = 1
-                    var lastRotateAt = 0L
+                    var lastDragAt = 0L
                     detectDragGestures(
                         onDragStart = { p ->
                             val c = Offset(size.width / 2f, size.height / 2f)
@@ -159,7 +159,7 @@ fun ClickWheel(
                             lastAngle = angleOf(p, c)
                             accum = 0f
                             velSteps = 1
-                            lastRotateAt = 0L
+                            lastDragAt = 0L
                         },
                         onDragEnd = { onRing = false },
                         onDragCancel = { onRing = false }
@@ -174,29 +174,32 @@ fun ClickWheel(
                         lastAngle = a
                         accum += delta
 
+                        // 速度档位按「相邻手势事件的时间间隔」计算，一次事件只算一次。
+                        // 旧实现把升档放在下面的 while 里逐格累加：单次快速滑动时 while 循环
+                        // 在同一毫秒内跑很多格，dt 几乎为 0，档位瞬间飙到上限（6），
+                        // 于是轻轻一甩就跨一大串、直接冲到列表底部。
+                        // 新实现：只有连续多个「快速事件」才逐级升档，停手/慢转立即回落到 1，
+                        // 且上限降到 3，手感更接近 iPod 的渐进加速。
+                        val now = System.currentTimeMillis()
+                        val steps = if (accelerated) {
+                            val gap = if (lastDragAt == 0L) Long.MAX_VALUE else now - lastDragAt
+                            lastDragAt = now
+                            velSteps = when {
+                                gap <= 24L -> (velSteps + 1).coerceAtMost(MAX_VELOCITY_STEPS)
+                                gap <= 70L -> velSteps
+                                else -> 1
+                            }
+                            velSteps
+                        } else 1
+
                         while (abs(accum) >= STEP_DEGREES) {
                             val forward = accum > 0
                             accum -= if (forward) STEP_DEGREES else -STEP_DEGREES
-                            // 震动/音效做节流，但每一格都必须上报 onRotate：
-                            // 之前把 onRotate 也放在节流判断之后，连续转动时多格被 continue 吞掉，
-                            // 表现就是搜索字母盘 / 选歌几乎不跟着转（只有偶尔一格生效）。
-                            val now = System.currentTimeMillis()
+                            // 震动/音效做节流，但每一格都必须上报 onRotate
                             if (now - lastTickAt >= MIN_TICK_INTERVAL_MS) {
                                 lastTickAt = now
                                 Haptics.tick(context, view)
                             }
-                            // iPod 式加速度：转得越快（相邻两格间隔越短），一次跨过的项越多；
-                            // 慢转或停顿后回到 1 格/项，默认手感细腻而不再是匀速飞奔。
-                            val steps = if (accelerated) {
-                                val dt = if (lastRotateAt == 0L) 1000L else now - lastRotateAt
-                                lastRotateAt = now
-                                velSteps = when {
-                                    dt <= 28L -> (velSteps + 1).coerceAtMost(MAX_VELOCITY_STEPS)
-                                    dt <= 60L -> velSteps
-                                    else -> 1
-                                }
-                                velSteps
-                            } else 1
                             onRotateRef.value(if (forward) steps else -steps)
                         }
                     }
@@ -372,11 +375,11 @@ private fun hitZone(p: Offset, size: IntSize): WheelZone {
     }
 }
 
-/** 12° 一格：30 格一圈，震动像细密的滚花，而不是粗颗粒的咔哒。 */
-private const val STEP_DEGREES = 12f
+/** 18° 一格：20 格一圈，慢转更稳、不易一甩跨过一堆选项。 */
+private const val STEP_DEGREES = 18f
 private const val MIN_TICK_INTERVAL_MS = 60L
-/** 加速度：连续快速转动时，单格最多跨过的项数（iPod 式越转越快）。 */
-private const val MAX_VELOCITY_STEPS = 6
+/** 加速度上限：连续快速转动时单格最多跨过的项数（iPod 式渐进加速，不宜过大以免冲底）。 */
+private const val MAX_VELOCITY_STEPS = 3
 private const val LONG_PRESS_MS = 420L
 private const val REPEAT_MS = 240L
 
