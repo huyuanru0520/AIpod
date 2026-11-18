@@ -346,42 +346,17 @@ private fun AppRoot() {
     // 把「屏幕方向」也纳入触发键：旋转设备时强制重新评估沉浸状态，
     // 避免横屏 Cover Flow 全屏「有时触发不了」（方向变化但 fullScreen/onPlayer 未变时也能重跑）。
     val orientation = LocalConfiguration.current.orientation
-    val themeBg = MaterialTheme.colorScheme.background
     LaunchedEffect(fullScreen, onPlayer, orientation) {
         val activity = context.findActivity() as? MainActivity ?: return@LaunchedEffect
         val window = activity.window
         val decor = window.decorView
         val immersive = fullScreen || onPlayer
-        if (immersive) {
-            // 全部交给 Activity：窗口属性与 hide() 的先后顺序在这里是有讲究的
-            //（见 applyImmersive 的注释）。旧代码在这之后又改了一次
-            // layoutInDisplayCutoutMode + requestLayout，正好把刚藏起来的系统栏顶了回来，
-            // 于是首帧顶部留下一条状态栏高的黑带，要转一次屏才好。
-            // 竖屏播放页保留状态栏；Cover Flow 与横屏播放页仍整屏沉浸
-            val keepStatus = onPlayer && !fullScreen && orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
-            activity.setImmersiveWanted(true, keepStatusBar = keepStatus)
-        } else {
-            activity.setImmersiveWanted(false)
-            // 先恢复窗口属性，最后再 show 系统栏（同样是顺序问题）
-            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
-            // 注意：不再 setDecorFitsSystemWindows(true)。窗口常驻 edge-to-edge，
-            // 普通页面的避让交给 AppRoot 的 statusBarsPadding / navigationBarsPadding。
-            val bgArgb = colorToArgb(themeBg)
-            window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(bgArgb))
-            decor.setBackgroundColor(bgArgb)
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                window.isNavigationBarContrastEnforced = false
-            }
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                val lp = window.attributes
-                lp.layoutInDisplayCutoutMode =
-                    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
-                window.attributes = lp
-            }
-            val controller = androidx.core.view.WindowCompat.getInsetsController(window, decor)
-            controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
-            runCatching { decor.requestApplyInsets() }
-        }
+        // 竖屏所有页面（曲库 / 设置 / 播放）统一走「透明栏 + 白色图标 + 系统栏常驻」：
+        // 内容 full-bleed 铺到栏下，状态栏 / 导航栏区域透出各页的红色光晕或模糊封面背景，
+        // 与内容完全同色——彻底消除浅色主题的白条、深色主题的黑色条（图二的割裂根因）。
+        // 横屏只用于 CoverFlow：整屏沉浸，隐藏所有系统栏。
+        val portrait = orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+        activity.setImmersiveWanted(true, keepStatusBar = portrait)
         // 诊断：同时记录状态栏 inset 与内容视图的实际高度，便于定位「顶部黑带」。
         val insets = androidx.core.view.ViewCompat.getRootWindowInsets(decor)
         val navRight =
@@ -442,22 +417,14 @@ private fun AppRoot() {
 
     val accentArgb by MusicBoxApp.instance.accentColor.collectAsState()
     MusicBoxTheme(darkTheme = dark, accent = androidx.compose.ui.graphics.Color(0xFF000000.toInt() or accentArgb)) {
-        val immersiveNow = fullScreen || onPlayer
-        // 沉浸页由 Activity 统一接管系统栏（透明 + 隐藏）。这里必须跳过，
-        // 否则 SystemBarColors 会把状态栏重新设成不透明色，并因此触发一次窗口属性重排，
-        // 把刚藏起来的系统栏又放回来——顶部那条黑带就是这么来的。
-        SystemBarColors(dark, immersive = immersiveNow)
-        // 沉浸页（播放页 / Cover Flow）背景是暗色的：把 AppRoot 背景与 NavHost 容器在沉浸时
-        // 统一改为纯黑，并去掉内容与底栏之间的 4dp 间隙——否则该间隙露出主题背景
-        //（浅色=白、深色=近黑），在暗色内容下方形成可见的「底部白块 / 黑边」。
-        val rootBg = if (immersiveNow) androidx.compose.ui.graphics.Color.Black
-                     else MaterialTheme.colorScheme.background
-        // 显式绘制背景：否则 Activity 窗口的浅色底会透出来，深色模式不是纯黑。
-        // 窗口常驻 edge-to-edge，所以普通页面要自己避让系统栏（状态栏 + 导航栏）；
-        // 沉浸页不加 padding，内容直接铺满整屏——这样「进入播放页」不再有窗口布局切换，
-        // 顶部也就不会残留一条与状态栏等高的黑带。
-        // 悬浮外壳（Dock + 迷你播放器）浮在内容之上，内容区按实测高度留出空位，
-        // 这样列表最后一项不会被 Dock 盖住，Dock 也始终悬在底部而不是挤占布局。
+        // 系统栏现在由 Activity 统一接管：竖屏全部「透明栏 + 白图标 + 常驻」，横屏整屏隐藏。
+        // 这里绝不能再调用 SystemBarColors——它会把栏刷成不透明主题背景色（浅色=白），
+        // 正是图二「顶部白色状态栏 / 底部白条」割裂的根因。诊断页分支仍单独调用它。
+        //
+        // 根 Box 不再对普通页加 statusBarsPadding / navigationBarsPadding：
+        // 内容 full-bleed 铺满整屏，状态栏 / 导航栏区域透出的就是各页面自己画的
+        // 红色光晕或模糊封面背景（背景色一致），安全区 paddings 下移到各页面内部处理。
+        val rootBg = androidx.compose.ui.graphics.Color.Black
         // library 首页与 settings 设置页都是纯 iPod 模拟器：滚轮上方那一块就是屏幕，
         // 没有 Dock、没有「正在播放」横条，唯一交互是转轮，因此这两页都不显示外壳。
         // 歌单页已砍掉，播放页全屏沉浸。当前所有路由都不需要底部 Dock。
@@ -465,25 +432,9 @@ private fun AppRoot() {
         var shellHeight by remember { mutableStateOf(0.dp) }
         val density = LocalDensity.current
 
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(rootBg)
-                .then(
-                    if (immersiveNow) Modifier
-                    else Modifier
-                        .statusBarsPadding()
-                        .navigationBarsPadding()
-                )
-        ) {
+        Box(Modifier.fillMaxSize().background(rootBg)) {
             Column(Modifier.fillMaxSize()) {
-            Box(
-                Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .background(rootBg)
-                    .then(if (immersiveNow) Modifier else Modifier.padding(bottom = 4.dp))
-            ) {
+            Box(Modifier.weight(1f).fillMaxWidth().background(rootBg)) {
                 NavHost(
                     navController,
                     startDestination = "library",
@@ -622,14 +573,6 @@ private fun SystemBarColors(dark: Boolean, immersive: Boolean = false) {
         }
     }
 }
-
-/** Compose 颜色 → 打包成 0xAARRGGBB 的 Int（避免依赖 toArgb 扩展的兼容性问题）。 */
-private fun colorToArgb(c: androidx.compose.ui.graphics.Color): Int = android.graphics.Color.argb(
-    (c.alpha * 255f).toInt().coerceIn(0, 255),
-    (c.red * 255f).toInt().coerceIn(0, 255),
-    (c.green * 255f).toInt().coerceIn(0, 255),
-    (c.blue * 255f).toInt().coerceIn(0, 255)
-)
 
 /**
  * 极简诊断界面：只依赖基础 Compose + Material3，

@@ -17,8 +17,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -47,6 +49,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -75,10 +78,12 @@ import com.musicbox.nas.player.PlayerController
 import com.musicbox.nas.ui.components.ClickWheel
 import com.musicbox.nas.ui.components.CoverImage
 import com.musicbox.nas.ui.components.rememberCoverBitmap
+import com.musicbox.nas.ui.theme.BrandRed
 import com.musicbox.nas.util.CrashLogger
 import com.musicbox.nas.util.formatDuration
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * 滚轮首页：iPod classic 式「转轮选歌」主界面，替换原来的 TabRow + Pager 首页。
@@ -258,8 +263,6 @@ internal fun WheelHome(
                                     Modifier
                                         .fillMaxWidth()
                                         .height(64.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(Color.White.copy(alpha = 0.10f))
                                         .clickable(
                                             interactionSource = remember { MutableInteractionSource() },
                                             indication = null
@@ -322,6 +325,7 @@ internal fun WheelHome(
             Row(
                 Modifier
                     .fillMaxWidth()
+                    .statusBarsPadding()
                     .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -359,15 +363,13 @@ internal fun WheelHome(
                 )
             }
 
-            // 「屏幕」：滚轮上方那块显示区。按要求去掉边框，仅保留圆角内嵌底色的凹陷感。
+            // 「屏幕」：滚轮上方那块显示区。不设任何底色 / 边框，列表直接浮在
+            // 底下的模糊封面 / 红色光晕之上，配合透明系统栏形成统一的玻璃质感。
             Box(
                 Modifier
                     .weight(1f)
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    // 半透明玻璃层：既能透出底下的封面模糊/红色光晕，又让列表区有「屏幕」凹陷感
-                    .background(Color.Black.copy(alpha = 0.16f))
             ) {
                 when {
                     // 搜索输入态：屏幕就是一块字母盘，转动滚轮选字母，中心键确认，MENU 退格
@@ -401,6 +403,7 @@ internal fun WheelHome(
             Box(
                 Modifier
                     .fillMaxWidth()
+                    .navigationBarsPadding()
                     .padding(bottom = 10.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -456,8 +459,13 @@ private fun WheelBackdrop(current: com.musicbox.nas.data.Track?, red: Color) {
             // 暗化蒙层：让白色文字与选中高亮在任意封面颜色上都清晰
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.42f)))
         } else {
-            // 无播放：苹果红径向渐变 + 轻微模糊，得到柔和光晕而非硬边纯色。
-            Canvas(Modifier.fillMaxSize()) {
+            // 无播放：苹果红径向渐变做真高斯模糊，得到柔和光晕而非硬边色块（需求：背景模糊处理）。
+            Canvas(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { scaleX = 1.1f; scaleY = 1.1f }
+                    .blur(48.dp)
+            ) {
                 val w = size.width
                 val h = size.height
                 drawRect(
@@ -620,22 +628,20 @@ private fun WheelList(
                     Modifier
                         .fillMaxWidth()
                         .height(66.dp)
-                        .background(
-                            if (sel) Color.White.copy(alpha = 0.20f)
-                            else Color.Transparent,
-                            RoundedCornerShape(12.dp)
-                        )
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // 选中指示：左侧一条短竖线，取代原来的灰色圆角背景框
+                    Box(
+                        Modifier
+                            .size(width = 3.dp, height = 30.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(if (sel) BrandRed else Color.Transparent)
+                    )
+                    Spacer(Modifier.width(10.dp))
                     when (item) {
                         is WheelItem.Action -> {
-                            Box(
-                                Modifier
-                                    .size(48.dp)
-                                    .background(Color.White.copy(alpha = 0.16f), RoundedCornerShape(10.dp)),
-                                Alignment.Center
-                            ) {
+                            Box(Modifier.size(48.dp), Alignment.Center) {
                                 Icon(item.icon, contentDescription = null, tint = fg)
                             }
                         }
@@ -689,16 +695,7 @@ private fun CategoryIcon(node: WheelNode, selected: Boolean, fg: Color) {
         WheelNode.Search -> Icons.Default.Search
         else -> Icons.Default.MusicNote
     }
-    Box(
-        Modifier
-            .size(48.dp)
-            .background(
-                if (selected) Color.White.copy(alpha = 0.30f)
-                else Color.White.copy(alpha = 0.10f),
-                RoundedCornerShape(10.dp)
-            ),
-        Alignment.Center
-    ) {
+    Box(Modifier.size(48.dp), Alignment.Center) {
         Icon(icon, contentDescription = null, tint = fg)
     }
 }
@@ -719,16 +716,31 @@ private fun ClickCoverFlow(
     onClick: (WheelItem) -> Unit
 ) {
     val rowState = rememberLazyListState()
-    // 外部 selected 变化时（如点进详情再返回）滚回对应项
-    LaunchedEffect(selected) {
-        runCatching { rowState.animateScrollToItem(selected, -160) }
-    }
-    // 用户左右滑动停下后，把当前首个可见项视为选中项
-    LaunchedEffect(rowState.isScrollInProgress) {
-        if (!rowState.isScrollInProgress && items.isNotEmpty()) {
-            val first = rowState.firstVisibleItemIndex
-            if (first != selected) onSelected(first)
+    // 只在首次有数据时定位一次到传入的选中项；之后绝不再因 selected 变化反向滚动。
+    // 之前的实现同时有「selected 变化 → animateScrollToItem」和「滑动停止 → onSelected」，
+    // 两者互相触发形成回环，表现为向后滑动静置后又自行滑回第一张。
+    var didInit by remember(items) { mutableStateOf(false) }
+    LaunchedEffect(items) {
+        if (!didInit && items.isNotEmpty()) {
+            didInit = true
+            val target = selected.coerceIn(0, items.lastIndex)
+            runCatching { rowState.scrollToItem(target, 0) }
         }
+    }
+    // 居中项完全由当前滚动位置派生（含滚动偏移），实时驱动 3D 效果；
+    // 滑动停止时只把结果回报给上层选中态，不做任何反向 scroll —— 这是消除回弹的关键。
+    val centered by remember {
+        derivedStateOf {
+            if (items.isEmpty()) 0 else {
+                val first = rowState.firstVisibleItemIndex
+                val off = rowState.firstVisibleItemScrollOffset
+                val approx = (off / 220f).roundToInt().coerceIn(0, 1)
+                (first + approx).coerceIn(0, items.lastIndex)
+            }
+        }
+    }
+    LaunchedEffect(centered) {
+        if (centered != selected) onSelected(centered)
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val card = minOf(maxHeight * 0.55f, maxWidth * 0.20f)
@@ -742,9 +754,9 @@ private fun ClickCoverFlow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             itemsIndexed(items) { i, item ->
-                val d = (i - selected).toFloat()
+                val d = (i - centered).toFloat()
                 val norm = (d / 1.6f).coerceIn(-1f, 1f)
-                val sel = i == selected
+                val sel = i == centered
                 Column(
                     Modifier
                         .width(itemW)
@@ -761,7 +773,7 @@ private fun ClickCoverFlow(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
                         ) {
-                            if (i != selected) onSelected(i)
+                            if (i != centered) onSelected(i)
                             onClick(item)
                         },
                     horizontalAlignment = Alignment.CenterHorizontally,

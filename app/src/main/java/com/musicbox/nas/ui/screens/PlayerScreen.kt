@@ -231,9 +231,28 @@ fun PlayerScreen(navController: NavController) {
                 }
 
                 if (current == null) {
+                    // 队列为空也必须有滚轮：iPod 界面的唯一交互就是转轮，
+                    // 没有滚轮时用户只能靠系统手势返回（不符合纯转轮交互）。
                     Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        Text("队列为空", color = Color.White.copy(alpha = 0.7f))
+                        Text("队列为空\n转动滚轮选择 · MENU 键返回", color = Color.White.copy(alpha = 0.7f),
+                            textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium)
                     }
+                    ClickWheel(
+                        diameter = wheel,
+                        isPlaying = false,
+                        centerActive = false,
+                        onRotate = { },
+                        onPlayPause = { },
+                        onPrevious = { },
+                        onNext = { },
+                        onRewind = { },
+                        onForward = { },
+                        onMenu = { },
+                        onMenuHome = { navController.popBackStack("library", false) },
+                        onConfirm = { },
+                        modifier = Modifier.align(Alignment.CenterHorizontally).offset(y = (-18).dp)
+                    )
+                    Spacer(Modifier.height(24.dp))
                 } else {
                     val c = current
                     // 中间区域：显示封面 / 歌词 / 队列；菜单打开时底部留白，避免与滚轮重叠

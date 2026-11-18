@@ -156,6 +156,8 @@ class MusicBoxApp : Application() {
      * 关闭时调试日志完全停用（仅 Logcat 静默），也可在设置里手动切换。
      */
     val debugMode = MutableStateFlow(false)
+    /** 设置页是否显示各条目的说明文字（副标题），默认显示；可在设置里一键隐藏。 */
+    val showDescriptions = MutableStateFlow(true)
     /**
      * 横屏 Cover Flow / 由其打开的专辑列表是否为「全屏沉浸」态。
      * 为 true 时 MainActivity 隐藏底部导航与 MiniPlayer，并切到沉浸式系统栏。
@@ -473,6 +475,8 @@ class MusicBoxApp : Application() {
         val dbg = p[D_DEBUG] ?: false
         debugMode.value = dbg
         CrashLogger.setEnabled(dbg)
+        // 说明文字显隐（默认显示）
+        showDescriptions.value = p[T_SHOW_DESC] ?: true
         val savedSource = p[S_SOURCE]
         if (savedSource != null) {
             runCatching { sourceMode.value = SourceMode.valueOf(savedSource) }
@@ -629,6 +633,12 @@ class MusicBoxApp : Application() {
         CrashLogger.setEnabled(on)
     }
 
+    /** 设置页说明文字（副标题）显隐：持久化。 */
+    suspend fun setShowDescriptions(on: Boolean) {
+        showDescriptions.value = on
+        dataStore.edit { it[T_SHOW_DESC] = on }
+    }
+
     // ---- 设置 JSON 导出 / 导入 ----
 
     /**
@@ -648,6 +658,7 @@ class MusicBoxApp : Application() {
             put("visible_tabs", visibleTabs.value.joinToString(","))
             put("audio_quality", audioQuality.value.name)
             put("debug_mode", debugMode.value)
+            put("show_descriptions", showDescriptions.value)
             put("scan_pace_ms", scanPaceMs.value)
             put("scan_concurrency", scanConcurrency.value)
             put("webdav", JSONObject().apply {
@@ -697,6 +708,7 @@ class MusicBoxApp : Application() {
         o.optString("audio_quality").takeIf { it.isNotBlank() }
             ?.let { runCatching { setAudioQuality(AudioQuality.valueOf(it)) } }
         if (o.has("debug_mode")) setDebugMode(o.optBoolean("debug_mode"))
+        if (o.has("show_descriptions")) setShowDescriptions(o.optBoolean("show_descriptions"))
         if (o.has("scan_pace_ms")) scanPaceMs.value = o.optLong("scan_pace_ms").coerceIn(0L, 2000L)
         if (o.has("scan_concurrency")) scanConcurrency.value = o.optInt("scan_concurrency").coerceIn(1, 48)
         // WebDAV
@@ -774,3 +786,4 @@ private val T_TABS_ORDERED = booleanPreferencesKey("visible_tabs_ordered_v2")
 private val Q_QUALITY = stringPreferencesKey("audio_quality")
 private val P_VOLUME = floatPreferencesKey("wheel_volume")
 private val D_DEBUG = booleanPreferencesKey("debug_mode")
+private val T_SHOW_DESC = booleanPreferencesKey("show_descriptions")

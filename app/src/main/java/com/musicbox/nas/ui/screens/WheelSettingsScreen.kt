@@ -21,8 +21,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -118,6 +120,7 @@ fun WheelSettingsScreen(navController: NavController) {
     val scanPace by app.scanPaceMs.collectAsState()
     val visibleTabs by app.visibleTabs.collectAsState()
     val debugMode by app.debugMode.collectAsState()
+    val showDescriptions by app.showDescriptions.collectAsState()
     val webDav by app.webDavConn.collectAsState()
     val fnos by app.fnosConn.collectAsState()
     val savedWebDav by app.savedWebDav.collectAsState()
@@ -177,7 +180,7 @@ fun WheelSettingsScreen(navController: NavController) {
     // 构建当前页条目
     val items: List<SettingItem> = when (node) {
         SettingsNode.Root -> buildRootSettings(
-            themeMode, accentArgb, sourceMode, audioQuality, scanPace, debugMode,
+            themeMode, accentArgb, sourceMode, audioQuality, scanPace, debugMode, showDescriptions,
             webDav, fnos, webDavScanning, coverCacheSize, transcodeSize
         )
         SettingsNode.Tabs -> buildTabsSettings(visibleTabs)
@@ -231,6 +234,7 @@ fun WheelSettingsScreen(navController: NavController) {
             }
             is SettingItem.Toggle -> when (item.key) {
                 "debug" -> scope.launch { app.setDebugMode(!debugMode) }
+                "descriptions" -> scope.launch { app.setShowDescriptions(!showDescriptions) }
                 "tabcheck" -> {
                     val key = item.data
                     val next = if (key in visibleTabs) visibleTabs.filter { it != key } else visibleTabs + key
@@ -333,7 +337,7 @@ fun WheelSettingsScreen(navController: NavController) {
         Column(Modifier.fillMaxSize()) {
             // 顶栏标题（静态，不可点）
             Row(
-                Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 6.dp),
+                Modifier.fillMaxWidth().statusBarsPadding().padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
@@ -341,23 +345,24 @@ fun WheelSettingsScreen(navController: NavController) {
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     val sub = when {
                         statusLine != null -> statusLine ?: ""
+                        !showDescriptions -> ""
                         node == SettingsNode.Tabs -> "中心键显示/隐藏 · 左右键调顺序"
                         items.isEmpty() -> "转动滚轮操作"
                         else -> "共 ${items.size} 项 · 中心键确认"
                     }
-                    Text(sub, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.75f),
-                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (sub.isNotBlank()) {
+                        Text(sub, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.75f),
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             }
 
-            // 屏幕区
+            // 屏幕区：不加底色 / 边框，列表直接浮在模糊封面 / 红色光晕上，玻璃质感
             Box(
                 Modifier
                     .weight(1f)
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(Color.Black.copy(alpha = 0.16f))
             ) {
                 when (node) {
                     SettingsNode.WebDavForm -> WebDavConnectionForm(
@@ -371,12 +376,12 @@ fun WheelSettingsScreen(navController: NavController) {
                         onCancel = { pop() }
                     )
                     SettingsNode.Logs -> LogsScreenBody(showDetails = showLogs)
-                    else -> SettingsList(items = items, selected = selected)
+                    else -> SettingsList(items = items, selected = selected, showDescriptions = showDescriptions)
                 }
             }
 
             // 转轮：唯一交互
-            Box(Modifier.fillMaxWidth().padding(bottom = 10.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 10.dp), contentAlignment = Alignment.Center) {
                 ClickWheel(
                     diameter = 264.dp,
                     isPlaying = isPlaying,
@@ -435,7 +440,7 @@ private fun SettingItem.subtitle(): String = when (this) {
 
 private fun buildRootSettings(
     theme: ThemeMode, accent: Int, source: SourceMode, quality: AudioQuality,
-    scanPace: Long, debug: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
+    scanPace: Long, debug: Boolean, showDescriptions: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
     coverSize: Long, transcodeSize: Long
 ): List<SettingItem> {
     val themeName = when (theme) { ThemeMode.SYSTEM -> "跟随系统"; ThemeMode.DARK -> "深色"; ThemeMode.LIGHT -> "浅色" }
@@ -456,6 +461,7 @@ private fun buildRootSettings(
     out += SettingItem.Action("test", "测试连接 / 诊断", "WebDAV 连接自检", Icons.Default.Link)
     out += SettingItem.Action("probe", "检测飞牛新接口", "风格 / 文件夹 / 漫游", Icons.Default.Storage)
     out += SettingItem.Toggle("debug", "调试模式", if (debug) "已开启" else "已关闭", Icons.Default.BugReport)
+    out += SettingItem.Toggle("descriptions", "说明文字", if (showDescriptions) "显示" else "已隐藏", Icons.Default.Description)
     out += SettingItem.Nav("logs", "运行日志", "查看 / 复制 / 另存", Icons.Default.Description)
     out += SettingItem.Action("export", "导出设置", "备份为 JSON", Icons.Default.ImportExport)
     out += SettingItem.Action("import", "导入设置", "从 JSON 恢复", Icons.Default.ImportExport)
@@ -502,7 +508,7 @@ private fun buildAboutSettings(): List<SettingItem> = listOf(
 // ==================== 屏幕列表 ====================
 
 @Composable
-private fun SettingsList(items: List<SettingItem>, selected: Int) {
+private fun SettingsList(items: List<SettingItem>, selected: Int, showDescriptions: Boolean = true) {
     val listState = rememberLazyListState()
     LaunchedEffect(selected) {
         if (selected in items.indices) runCatching { listState.animateScrollToItem(selected, -180) }
@@ -519,14 +525,18 @@ private fun SettingsList(items: List<SettingItem>, selected: Int) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .height(if (item is SettingItem.Info) 56.dp else 66.dp)
-                    .background(
-                        if (sel) Color.White.copy(alpha = 0.20f) else Color.Transparent,
-                        RoundedCornerShape(12.dp)
-                    )
+                    .height(if (item is SettingItem.Info && showDescriptions) 56.dp else 52.dp)
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // 选中指示：左侧短竖线，取代灰色圆角背景框
+                Box(
+                    Modifier
+                        .size(width = 3.dp, height = 28.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(if (sel) BrandRed else Color.Transparent)
+                )
+                Spacer(Modifier.width(12.dp))
                 val icon = when (item) {
                     is SettingItem.Nav -> item.icon
                     is SettingItem.Choice -> item.icon
@@ -534,19 +544,18 @@ private fun SettingsList(items: List<SettingItem>, selected: Int) {
                     is SettingItem.Action -> item.icon
                     is SettingItem.Info -> Icons.Default.Info
                 }
-                Box(
-                    Modifier.size(48.dp).background(Color.White.copy(alpha = 0.16f), RoundedCornerShape(10.dp)),
-                    Alignment.Center
-                ) {
+                Box(Modifier.size(30.dp), Alignment.Center) {
                     Icon(icon, contentDescription = null, tint = fg)
                 }
-                Spacer(Modifier.width(14.dp))
+                Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(item.title(), style = if (sel) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyLarge,
                         fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal, color = fg,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(item.subtitle(), style = MaterialTheme.typography.labelSmall, color = fg.copy(alpha = 0.6f),
-                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (showDescriptions) {
+                        Text(item.subtitle(), style = MaterialTheme.typography.labelSmall, color = fg.copy(alpha = 0.6f),
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
                 }
                 if (sel && item !is SettingItem.Info) {
                     Text("↵", color = Color.White, fontSize = 20.sp)
@@ -587,7 +596,12 @@ private fun SettingsBackdrop(current: com.musicbox.nas.data.Track?, red: Color) 
                 modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = 1.15f; scaleY = 1.15f }.blur(32.dp))
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
         } else {
-            Canvas(Modifier.fillMaxSize()) {
+            Canvas(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { scaleX = 1.1f; scaleY = 1.1f }
+                    .blur(48.dp)
+            ) {
                 val w = size.width; val h = size.height
                 drawRect(Brush.radialGradient(
                     colors = listOf(red.copy(alpha = 0.96f), red, Color(0xFF8E1024), Color(0xFF4E0814)),
