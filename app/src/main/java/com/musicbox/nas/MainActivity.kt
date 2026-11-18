@@ -14,9 +14,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -491,20 +489,13 @@ private fun AppRoot() {
                 NavHost(
                     navController,
                     startDestination = "library",
-                    // 页面切换动画：普通页轻推 + 淡入，播放页从底部升起（贴合"打开正在播放"的心智）。
-                    // 时长控制在 140~260ms：再长会让两页同时绘制的时间变长，反而显得卡。
-                    enterTransition = {
-                        fadeIn(tween(180)) + slideInHorizontally(tween(220)) { it / 16 }
-                    },
-                    exitTransition = {
-                        fadeOut(tween(140)) + slideOutHorizontally(tween(200)) { -it / 24 }
-                    },
-                    popEnterTransition = {
-                        fadeIn(tween(180)) + slideInHorizontally(tween(220)) { -it / 16 }
-                    },
-                    popExitTransition = {
-                        fadeOut(tween(140)) + slideOutHorizontally(tween(200)) { it / 24 }
-                    }
+                    // 页面切换动画：只用淡入淡出，去掉所有左右滑动转场（含返回）。
+                    // 需求：除 CoverFlow 自身的横向滑动外，其它页面不带任何左右手势/滑动观感；
+                    // 播放页仍保留从底部升起（见其独立 enter/exit），那是纵向不涉及左右。
+                    enterTransition = { fadeIn(tween(180)) },
+                    exitTransition = { fadeOut(tween(140)) },
+                    popEnterTransition = { fadeIn(tween(180)) },
+                    popExitTransition = { fadeOut(tween(140)) }
                 ) {
                     composable("library") { LibraryScreen(navController) }
                     composable("playlists") { PlaylistsScreen(navController) }

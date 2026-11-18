@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.musicbox.nas.player.PlayerController
+import com.musicbox.nas.ui.theme.BrandRed
 
 /**
  * 「液态玻璃」外壳。
@@ -126,7 +127,9 @@ fun LiquidGlassDock(
     selected: Int,
     items: List<DockItem>,
     onSelect: (Int) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 强调色：默认苹果音乐红，让二级页 Dock 与红色主界面呼应；不传则跟随主题主色。 */
+    accent: Color = BrandRed
 ) {
     val colors = MaterialTheme.colorScheme
     val dark = colors.background.luminance() < 0.5f
@@ -151,10 +154,10 @@ fun LiquidGlassDock(
                     .width(itemWidth)
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(percent = 50))
-                    .background(colors.primary.copy(alpha = if (dark) 0.20f else 0.14f))
+                    .background(accent.copy(alpha = if (dark) 0.24f else 0.16f))
                     .border(
                         width = 1.dp,
-                        color = colors.primary.copy(alpha = 0.35f),
+                        color = accent.copy(alpha = 0.40f),
                         shape = RoundedCornerShape(percent = 50)
                     )
             )
@@ -182,7 +185,7 @@ fun LiquidGlassDock(
                         Icon(
                             item.icon,
                             contentDescription = item.label,
-                            tint = if (active) colors.primary else colors.onSurfaceVariant,
+                            tint = if (active) accent else colors.onSurfaceVariant,
                             modifier = Modifier.size(22.dp)
                         )
                         Spacer(Modifier.height(2.dp))
@@ -190,7 +193,7 @@ fun LiquidGlassDock(
                             item.label,
                             fontSize = 10.sp,
                             fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (active) colors.primary else colors.onSurfaceVariant,
+                            color = if (active) accent else colors.onSurfaceVariant,
                             maxLines = 1
                         )
                     }
@@ -289,7 +292,7 @@ fun GlassMiniPlayer(
                 Modifier
                     .fillMaxWidth(progress.coerceIn(0f, 1f))
                     .fillMaxSize()
-                    .background(colors.primary.copy(alpha = 0.9f))
+                    .background(BrandRed)
             )
         }
     }

@@ -3,8 +3,10 @@ package com.musicbox.nas.ui.screens
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -108,6 +110,7 @@ import com.musicbox.nas.ui.components.ClickWheel
 import com.musicbox.nas.ui.components.CoverImage
 import com.musicbox.nas.ui.components.HiResBadge
 import com.musicbox.nas.ui.components.rememberCoverBitmap
+import com.musicbox.nas.ui.theme.BrandRed
 import com.musicbox.nas.util.formatDuration
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.filterNotNull
@@ -156,25 +159,20 @@ fun PlayerScreen(navController: NavController) {
         }
     }
 
-    // 横屏：整页改为「左侧封面 + 右侧歌词」的沉浸式布局，背景取当前封面主色调并模糊
+    // 横屏：不再展示「横屏播放页」。转横屏时直接退回曲库首页的全屏 CoverFlow
+    //（点击封面进专辑、左右滑动切换）。竖屏仍保留完整的 iPod 转轮播放页。
     val isLandscape =
         LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     if (isLandscape) {
-        LandscapePlayer(
-            navController = navController,
-            track = current,
-            duration = duration,
-            isPlaying = isPlaying,
-            playError = playError,
-            onQueueClick = { showQueue = true }
-        )
-        if (showQueue) {
-            QueueHost(
-                showQueue = true, queue = queue, currentIndex = idx,
-                shuffle = shuffle, repeatMode = repeatMode
-            ) { showQueue = false }
+        LaunchedEffect(Unit) {
+            navController.navigate("library") {
+                popUpTo("player") { inclusive = true }
+                launchSingleTop = true
+            }
         }
+        // 转场瞬间先给一块红底，避免闪一下黑屏
+        Box(Modifier.fillMaxSize().background(BrandRed))
         return
     }
 
@@ -186,8 +184,10 @@ fun PlayerScreen(navController: NavController) {
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {
             val wheel = minOf(maxWidth * 0.64f, maxHeight * 0.40f, 286.dp)
             var showLyrics by remember { mutableStateOf(false) }
-            // 转轮随当前界面切换职责：队列选歌 / 调进度 / 调音量。
-            // 进度模式不再切换中间区为独立面板，而是就地叠加一个进度 HUD（见下方 WheelProgressHud）。
+            // 歌词滚动由外部驱动：滚轮在歌词界面直接滚动歌词（见 onRotate）。
+            val lyricsScroll = rememberScrollState()
+            // 进度模式：封面界面按中心键切换，滚轮调进度；只在原进度条上加粗红色标记，
+            // 不再弹出独立 HUD。歌词界面滚轮只滚歌词。
             val body = when {
                 menuOpen -> "menu"
                 showLyrics -> "lyrics"
@@ -204,7 +204,7 @@ fun PlayerScreen(navController: NavController) {
                 IpodTopBar(
                     track = current,
                     showLyrics = showLyrics,
-                    onToggleLyrics = { showLyrics = !showLyrics },
+                    onToggleLyrics = { showLyrics = !showLyrics; if (showLyrics) progressMode = false },
                     onQueueClick = { showQueue = true },
                     onBack = { navController.popBackStack() }
                 )
@@ -262,7 +262,8 @@ fun PlayerScreen(navController: NavController) {
                                         highlightColor = Color.White,
                                         contentVertical = 0.dp,
                                         largeText = true,
-                                        fadeByDistance = true
+                                        fadeByDistance = true,
+                                        scrollState = lyricsScroll
                                     )
                                     Text(
                                         "封面",
@@ -273,17 +274,17 @@ fun PlayerScreen(navController: NavController) {
                                             .padding(top = 2.dp, end = 20.dp)
                                             .clip(RoundedCornerShape(20.dp))
                                             .background(Color.White.copy(alpha = 0.14f))
-                                            .clickable { showLyrics = false }
+                                            .clickable { showLyrics = false; progressMode = false }
                                             .padding(horizontal = 12.dp, vertical = 6.dp)
                                     )
                                 }
-                                else -> NowPlayingArt(track = c, onShowLyrics = { showLyrics = true })
+                                else -> NowPlayingArt(track = c, onShowLyrics = { showLyrics = true; progressMode = false })
                             }
                         }
                     }
 
                     // 转动音量时给一个短暂反馈，松手 1.4 秒后淡出
-                    if (volumeHint && !progressMode && !menuOpen) {
+                    if (volumeHint && !progressMode && !menuOpen && !showLyrics) {
                         Row(
                             Modifier
                                 .align(Alignment.CenterHorizontally)
@@ -301,18 +302,20 @@ fun PlayerScreen(navController: NavController) {
                         }
                     }
 
-                    if (!progressMode && !menuOpen) {
+                    // 进度条常驻（封面 / 歌词都显示）。中心键进入进度模式时，
+                    // 只把这段红色进度标记加粗——不再弹出任何独立 HUD 面板。
+                    if (!menuOpen) {
                         Column(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
                             SeekBar(
                                 duration = duration,
+                                activeColor = BrandRed,
+                                thumbColor = BrandRed,
                                 inactiveColor = Color.White.copy(alpha = 0.22f),
                                 labelColor = Color.White.copy(alpha = 0.6f),
+                                emphasized = progressMode && !showLyrics,
                                 onSeek = { PlayerController.seekTo(it) }
                             )
                         }
-                    } else if (progressMode && !menuOpen) {
-                        // 中心键就地调进度：保留封面，仅在转轮上方浮出一块进度 HUD
-                        WheelProgressHud(durationMs = duration)
                     }
                     Spacer(Modifier.height(2.dp))
 
@@ -325,6 +328,10 @@ fun PlayerScreen(navController: NavController) {
                                 menuOpen -> {
                                     selectedQueueIndex =
                                         (selectedQueueIndex + steps).coerceIn(0, queue.lastIndex.coerceAtLeast(0))
+                                }
+                                showLyrics -> {
+                                    // 歌词界面：滚轮直接滚动歌词（正转看后面的歌词）
+                                    scope.launch { lyricsScroll.scrollBy(steps * 120f) }
                                 }
                                 progressMode -> seekBy(steps * 5_000L)
                                 else -> {
@@ -349,6 +356,7 @@ fun PlayerScreen(navController: NavController) {
                                         menuOpen = false
                                     }
                                 }
+                                showLyrics -> showLyrics = false
                                 else -> progressMode = !progressMode
                             }
                         },
@@ -974,6 +982,8 @@ private fun SeekBar(
     inactiveColor: Color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.30f),
     thumbColor: Color = MaterialTheme.colorScheme.primary,
     labelColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    /** 进度模式：把红色进度标记加粗，作为「正在调进度」的就地反馈。 */
+    emphasized: Boolean = false,
     onSeek: (Long) -> Unit
 ) {
     // 进度在此处自行订阅：500ms 的更新只会让这条进度条重组，不再牵动整页。
@@ -981,6 +991,8 @@ private fun SeekBar(
     var drag by remember(duration) { mutableStateOf<Float?>(null) }
     val maxRange = duration.coerceAtLeast(1).toFloat()
     val shown = drag ?: livePosition.toFloat().coerceIn(0f, maxRange)
+    val trackH = if (emphasized) 8.dp else 3.dp
+    val thumbS = if (emphasized) 16.dp else 10.dp
 
     Column(modifier.fillMaxWidth()) {
         Slider(
@@ -995,7 +1007,7 @@ private fun SeekBar(
             thumb = {
                 Box(
                     Modifier
-                        .size(10.dp)
+                        .size(thumbS)
                         .clip(CircleShape)
                         .background(thumbColor)
                 )
@@ -1009,7 +1021,7 @@ private fun SeekBar(
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .height(3.dp)
+                        .height(trackH)
                         .clip(CircleShape)
                         .background(inactiveColor)
                 ) {
@@ -1172,7 +1184,9 @@ private fun LyricsView(
     active: Boolean = true,
     /** 整合版大歌词：字号更大、左对齐、离当前句越远越淡（贴近参考图）。 */
     largeText: Boolean = false,
-    fadeByDistance: Boolean = false
+    fadeByDistance: Boolean = false,
+    /** 外部滚动状态：播放页滚轮可直接滚动歌词。 */
+    scrollState: ScrollState? = null
 ) {
     // 进度只在这里被「间接」读取：derivedStateOf 内部取进度算当前行号，
     // 结果（Int）不变时不会让歌词树重组——省掉每 500ms 一次的全量歌词重排。
@@ -1207,11 +1221,12 @@ private fun LyricsView(
                 }
             }
             if (lines.isEmpty()) {
-                // 没有时间轴的纯文本歌词：居中排版，可手动上下滚动
+                // 没有时间轴的纯文本歌词：居中排版，滚轮 / 手动都能上下滚动
+                val plainScroll = scrollState ?: rememberScrollState()
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
+                        .verticalScroll(plainScroll)
                         .padding(24.dp),
                     contentAlignment = Alignment.TopCenter
                 ) {
@@ -1231,6 +1246,7 @@ private fun LyricsView(
                     minVerticalPadding = contentVertical,
                     largeText = largeText,
                     fadeByDistance = fadeByDistance,
+                    scrollState = scrollState,
                     onSeek = { PlayerController.seekTo(it) }
                 )
             }
@@ -1258,9 +1274,11 @@ private fun TimedLyrics(
     minVerticalPadding: Dp,
     largeText: Boolean = false,
     fadeByDistance: Boolean = false,
+    scrollState: ScrollState? = null,
     onSeek: (Long) -> Unit
 ) {
-    val scroll = rememberScrollState()
+    val fallbackScroll = rememberScrollState()
+    val scroll = scrollState ?: fallbackScroll
     val centers = remember(lines) { mutableStateMapOf<Int, Int>() }
     // 程序滚动时 isScrollInProgress 也会变 true，不能把它当成「用户拖动」
     var programmatic by remember { mutableStateOf(false) }

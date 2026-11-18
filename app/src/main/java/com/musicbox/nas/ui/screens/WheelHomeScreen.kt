@@ -3,11 +3,13 @@ package com.musicbox.nas.ui.screens
 import android.content.res.Configuration
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -25,6 +27,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
@@ -34,6 +37,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -49,7 +53,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
@@ -95,6 +98,8 @@ internal fun WheelHome(
     var stack by remember(data) { mutableStateOf<List<WheelNode>>(listOf(WheelNode.Root)) }
     // 当前层选中项（切层时重置）
     var selected by remember(data) { mutableStateOf(0) }
+    // 横屏：CoverFlow 点开的专辑详情节点；null=封面流。横竖屏各用一套浏览状态，互不干扰。
+    var landscapeDetail by remember(data) { mutableStateOf<WheelNode?>(null) }
 
     // 页面数据由 Worker 异步加载，按「层类型 + 参数」缓存，避免重组重复请求网络。
     val scope = rememberCoroutineScope()
@@ -107,8 +112,10 @@ internal fun WheelHome(
     var searchPhase by remember(data) { mutableStateOf(0) } // 0=字母盘输入, 1=结果列表
 
     val node = stack.last()
-    // 横屏：Root 主菜单直接映射为「专辑」层，进入第一屏即为封面流（对齐原 CoverFlow 行为）
-    val effectiveNode: WheelNode = if (isLandscape && node is WheelNode.Root) WheelNode.Albums else node
+    // 横屏：无滚轮，点封面进专辑列表。landscapeDetail 为 null 时展示专辑封面流；
+    // 非 null 时展示该专辑的曲目列表（仍全屏），左上角返回键回到封面流。
+    // 竖屏：Root 主菜单直接映射为「专辑」层由滚轮驱动（保持既有行为）。
+    val effectiveNode: WheelNode = if (isLandscape) (landscapeDetail ?: WheelNode.Albums) else node
 
     LaunchedEffect(effectiveNode, data, searchQuery) {
         loading = true
@@ -138,14 +145,14 @@ internal fun WheelHome(
         if (stack.size > 1) stack = listOf<WheelNode>(WheelNode.Root)
     }
 
-    // 中心键：歌曲直接播放并进入播放页；其它层 push 下一层。
-    fun confirm(item: WheelItem?) {
+    // 中心键 / 点击：歌曲直接播放；竖屏进播放页，横屏留在全屏 CoverFlow 只播放不跳页。
+    fun confirm(item: WheelItem?, enterPlayer: Boolean = true) {
         if (item == null) return
         when (item) {
             is WheelItem.Op -> push(item.node)
             is WheelItem.Track -> {
                 PlayerController.playTracks(item.all, item.index)
-                navController.navigate("player")
+                if (enterPlayer) navController.navigate("player")
             }
             is WheelItem.Action -> {
                 when (item.key) {
@@ -154,7 +161,7 @@ internal fun WheelHome(
                         val list = data.loadRoam()
                         if (list.isNotEmpty()) {
                             PlayerController.playTracks(list, 0)
-                            navController.navigate("player")
+                            if (enterPlayer) navController.navigate("player")
                         }
                     }
                     "search" -> push(WheelNode.Search)
@@ -198,14 +205,107 @@ internal fun WheelHome(
         onDispose { app.fullScreenMode.value = false }
     }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(if (immersive) Color.Black else MaterialTheme.colorScheme.background)
-    ) {
+    // 苹果音乐红：主界面底色统一用它，横竖屏都不再是黑底。
+    val appleRed = com.musicbox.nas.ui.theme.BrandRed
+
+    if (isLandscape) {
+        // ============ 横屏：全屏 CoverFlow，无滚轮，点击进专辑列表，左上角返回 ============
+        Box(Modifier.fillMaxSize().background(appleRed)) {
+            when {
+                loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                    CircularProgressIndicator(color = Color.White)
+                }
+                loadError != null -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                    Text(loadError ?: "加载失败", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodyMedium)
+                }
+                items.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                    Text(effectiveNode.hint, color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodyMedium)
+                }
+                landscapeDetail != null -> {
+                    // 专辑曲目列表（仍全屏）：可点击播放，左上角返回封面流
+                    Column(Modifier.fillMaxSize()) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(onClick = { landscapeDetail = null }) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "返回封面流", tint = Color.White)
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text(effectiveNode.title, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("共 ${items.size} 首 · 点击播放", color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                        LazyColumn(
+                            Modifier.fillMaxSize().weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            itemsIndexed(items) { i, item ->
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .height(64.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color.White.copy(alpha = 0.10f))
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null
+                                        ) { confirm(item, enterPlayer = false) }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    val cover = when (item) {
+                                        is WheelItem.Op -> item.cover
+                                        is WheelItem.Track -> item.cover
+                                        is WheelItem.Action -> null
+                                    }
+                                    val embedded = when (item) {
+                                        is WheelItem.Op -> item.embedded
+                                        is WheelItem.Track -> item.embedded
+                                        is WheelItem.Action -> null
+                                    }
+                                    if (cover != null || embedded != null) {
+                                        CoverImage(cover, Modifier.size(46.dp), embeddedAudioUrl = embedded)
+                                    } else {
+                                        Box(Modifier.size(46.dp), Alignment.Center) {
+                                            Icon(Icons.Default.MusicNote, null, tint = Color.White.copy(alpha = 0.7f))
+                                        }
+                                    }
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(item.title(), color = Color.White, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(item.subtitle(), color = Color.White.copy(alpha = 0.65f), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                else -> {
+                    // 专辑封面流：左右滑动切换（CoverFlow 自身保留滑动），点击封面进专辑
+                    ClickCoverFlow(
+                        items = items,
+                        selected = selected.coerceIn(0, items.lastIndex),
+                        onSelected = { selected = it },
+                        onClick = { item ->
+                            when (item) {
+                                is WheelItem.Op -> landscapeDetail = item.node
+                                is WheelItem.Track -> confirm(item, enterPlayer = false)
+                                is WheelItem.Action -> confirm(item, enterPlayer = false)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+        return
+    }
+
+    // ============ 竖屏：红色底 + 屏幕列表 + 滚轮 ============
+    Box(Modifier.fillMaxSize().background(appleRed)) {
         Column(Modifier.fillMaxSize()) {
             // 顶栏只是「屏幕」上的一块静态标题，没有任何按钮——首页唯一交互是转轮。
-            // 标题 / 副标题直接画在屏幕上，不去响应点击。
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -216,7 +316,7 @@ internal fun WheelHome(
                     Text(
                         effectiveNode.title,
                         style = MaterialTheme.typography.titleMedium,
-                        color = if (immersive) Color.White else MaterialTheme.colorScheme.onBackground,
+                        color = Color.White,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -229,42 +329,31 @@ internal fun WheelHome(
                     Text(
                         sub,
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (immersive) Color.White.copy(alpha = 0.6f)
-                                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        color = Color.White.copy(alpha = 0.75f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
-            if (!statusLine.isNullOrBlank() && !immersive) {
+            if (!statusLine.isNullOrBlank()) {
                 Text(
                     statusLine,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
+                    color = Color.White.copy(alpha = 0.85f),
                     maxLines = 1,
                     modifier = Modifier.padding(horizontal = 16.dp)
                 )
             }
 
-            // 「屏幕」：滚轮上方那块显示区，做成 iPod 式内嵌面板——圆角 + 内嵌底色 + 细描边。
-            // 只影响观感，里面所有内容仍由转轮驱动，无任何点击。
+            // 「屏幕」：滚轮上方那块显示区。按要求去掉边框，仅保留圆角内嵌底色的凹陷感。
             Box(
                 Modifier
                     .weight(1f)
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp)
                     .clip(RoundedCornerShape(18.dp))
-                    .background(
-                        if (immersive) Color(0xFF0C0C0E)
-                        else {
-                            val bg = MaterialTheme.colorScheme.background
-                            // 浅色用略深于背景的灰、深色用略亮于背景的灰，形成「屏幕」凹陷感
-                            if (bg.luminance() < 0.5f) Color(0xFF202024) else Color(0xFFEDEDF0)
-                        }
-                    )
-                    .border(1.dp, if (immersive) Color.White.copy(alpha = 0.08f)
-                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f), RoundedCornerShape(18.dp))
+                    .background(appleRed.copy(alpha = 0.55f))
             ) {
                 when {
                     // 搜索输入态：屏幕就是一块字母盘，转动滚轮选字母，中心键确认，MENU 退格
@@ -272,44 +361,28 @@ internal fun WheelHome(
                         query = searchQuery,
                         chars = searchChars,
                         charIndex = searchChar,
-                        dark = !immersive
+                        dark = false
                     )
                     loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                        CircularProgressIndicator(color = if (immersive) Color.White else MaterialTheme.colorScheme.primary)
+                        CircularProgressIndicator(color = Color.White)
                     }
                     loadError != null -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                        Text(
-                            loadError ?: "加载失败",
-                            color = if (immersive) Color.White.copy(alpha = 0.7f) else MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                        Text(loadError ?: "加载失败", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall)
                     }
                     items.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                        Text(
-                            effectiveNode.hint,
-                            color = if (immersive) Color.White.copy(alpha = 0.6f)
-                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                    isLandscape -> {
-                        // 横屏：列表区直接展示 CoverFlow，滚轮切换
-                        CoverFlowWheel(
-                            items = items,
-                            selected = selected.coerceIn(0, items.lastIndex)
-                        )
+                        Text(effectiveNode.hint, color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodyMedium)
                     }
                     else -> {
                         WheelList(
                             items = items,
                             selected = selected,
-                            immersive = immersive
+                            immersive = false
                         )
                     }
                 }
             }
 
-            // 转轮：竖屏大半屏可见；横屏缩小放底部
+            // 转轮：竖屏保留 iPod 转轮作为唯一交互
             val isPlaying by PlayerController.isPlaying.collectAsState()
             Box(
                 Modifier
@@ -318,10 +391,10 @@ internal fun WheelHome(
                 contentAlignment = Alignment.Center
             ) {
                 ClickWheel(
-                    diameter = if (isLandscape) 168.dp else 264.dp,
+                    diameter = 264.dp,
                     isPlaying = isPlaying,
                     centerActive = false,
-                    dark = !immersive,
+                    dark = true,
                     onRotate = { steps ->
                         if (node is WheelNode.Search && searchPhase == 0) {
                             val n = searchChars.length
@@ -468,7 +541,8 @@ private fun WheelList(
         }
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val fg = if (immersive) Color.White else MaterialTheme.colorScheme.onBackground
+        // 红底上统一用白字 / 白色高亮
+        val fg = Color.White
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
@@ -482,7 +556,7 @@ private fun WheelList(
                         .fillMaxWidth()
                         .height(66.dp)
                         .background(
-                            if (sel) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                            if (sel) Color.White.copy(alpha = 0.20f)
                             else Color.Transparent,
                             RoundedCornerShape(12.dp)
                         )
@@ -494,10 +568,10 @@ private fun WheelList(
                             Box(
                                 Modifier
                                     .size(48.dp)
-                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f), RoundedCornerShape(10.dp)),
+                                    .background(Color.White.copy(alpha = 0.16f), RoundedCornerShape(10.dp)),
                                 Alignment.Center
                             ) {
-                                Icon(item.icon, contentDescription = null, tint = if (sel) MaterialTheme.colorScheme.primary else fg)
+                                Icon(item.icon, contentDescription = null, tint = fg)
                             }
                         }
                         is WheelItem.Op -> {
@@ -530,7 +604,7 @@ private fun WheelList(
                         )
                     }
                     if (sel) {
-                        Text("↵", color = MaterialTheme.colorScheme.primary, fontSize = 20.sp)
+                        Text("↵", color = Color.White, fontSize = 20.sp)
                     }
                 }
             }
@@ -554,30 +628,46 @@ private fun CategoryIcon(node: WheelNode, selected: Boolean, fg: Color) {
         Modifier
             .size(48.dp)
             .background(
-                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
+                if (selected) Color.White.copy(alpha = 0.30f)
                 else Color.White.copy(alpha = 0.10f),
                 RoundedCornerShape(10.dp)
             ),
         Alignment.Center
     ) {
-        Icon(icon, contentDescription = null, tint = if (selected) MaterialTheme.colorScheme.primary else fg)
+        Icon(icon, contentDescription = null, tint = fg)
     }
 }
 
-// ==================== 横屏：CoverFlow 唱片架（滚轮驱动） ====================
+// ==================== 横屏：全屏 CoverFlow 唱片架（左右滑动 + 点击选择） ====================
 
+/**
+ * 横屏全屏 CoverFlow：铺满整屏、没有滚轮、没有底栏。
+ * - 左右滑动：用 LazyRow 自带手势（这是被允许的例外——CoverFlow 保留左右滑动切封面）；
+ *   滑动停下后把居中项回报给 [onSelected]，3D 倾斜随之更新。
+ * - 点击：点任意封面即回调 [onClick]，由上层决定进专辑列表还是播放。
+ */
 @Composable
-private fun CoverFlowWheel(
+private fun ClickCoverFlow(
     items: List<WheelItem>,
-    selected: Int
+    selected: Int,
+    onSelected: (Int) -> Unit,
+    onClick: (WheelItem) -> Unit
 ) {
     val rowState = rememberLazyListState()
+    // 外部 selected 变化时（如点进详情再返回）滚回对应项
     LaunchedEffect(selected) {
         runCatching { rowState.animateScrollToItem(selected, -160) }
     }
+    // 用户左右滑动停下后，把当前首个可见项视为选中项
+    LaunchedEffect(rowState.isScrollInProgress) {
+        if (!rowState.isScrollInProgress && items.isNotEmpty()) {
+            val first = rowState.firstVisibleItemIndex
+            if (first != selected) onSelected(first)
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val card = minOf(maxHeight * 0.5f, maxWidth * 0.22f)
-        val itemW = card * 1.15f
+        val card = minOf(maxHeight * 0.55f, maxWidth * 0.20f)
+        val itemW = card * 1.18f
         LazyRow(
             state = rowState,
             modifier = Modifier.fillMaxSize(),
@@ -601,6 +691,13 @@ private fun CoverFlowWheel(
                             scaleY = s
                             alpha = (1f - abs(norm) * 0.5f).coerceIn(0.15f, 1f)
                             cameraDistance = 14f * density
+                        }
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            if (i != selected) onSelected(i)
+                            onClick(item)
                         },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
@@ -608,7 +705,8 @@ private fun CoverFlowWheel(
                     Box(
                         Modifier
                             .size(card)
-                            .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.10f))
                     ) {
                         val cover = when (item) {
                             is WheelItem.Op -> item.cover
@@ -627,7 +725,7 @@ private fun CoverFlowWheel(
                                 Icon(
                                     Icons.Default.Album,
                                     contentDescription = null,
-                                    tint = Color.White.copy(alpha = 0.3f),
+                                    tint = Color.White.copy(alpha = 0.5f),
                                     modifier = Modifier.size(card * 0.4f)
                                 )
                             }
@@ -646,6 +744,15 @@ private fun CoverFlowWheel(
                 }
             }
         }
+        // 顶部提示：左右滑动切换 · 点击进专辑
+        Text(
+            "左右滑动切换封面 · 点击进专辑",
+            color = Color.White.copy(alpha = 0.7f),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 10.dp)
+        )
     }
 }
 
