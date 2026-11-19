@@ -3,6 +3,7 @@ package com.aipod.player
 import android.content.Context
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -98,9 +99,12 @@ object PlayerHolder {
         val app = context as? MusicBoxApp
             ?: throw IllegalStateException("Application 未初始化，无法取得认证 OkHttpClient")
 
-        // 所有字节区间请求统一走带认证的 OkHttp 客户端（WebDAV Basic / FnOS Cookie）
-        val dataSourceFactory = OkHttpDataSource.Factory(app.okHttpClient)
+        // 网络音源（http/https）走带认证的 OkHttp（WebDAV Basic / FnOS Cookie）；
+        // 本地 SAF 文件是 content:// URI，OkHttpDataSource 只认 http(s) 会抛 "Malformed URL"，
+        // 用 DefaultDataSource 按 scheme 自动路由：content:// → ContentResolver、file:// → FileDataSource。
+        val okHttpDataSourceFactory = OkHttpDataSource.Factory(app.okHttpClient)
             .setUserAgent("AIpod/1.0.6")
+        val dataSourceFactory = DefaultDataSource.Factory(context, okHttpDataSourceFactory)
 
         val renderersFactory = DefaultRenderersFactory(context)
             .setEnableDecoderFallback(true)
