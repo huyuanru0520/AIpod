@@ -221,6 +221,20 @@ internal fun WheelHome(
         }
     }
 
+    /**
+     * 左右键移动一行（列表界面行为）：与中心转轮转动共用同一套「选中项」语义。
+     * 搜索字母盘阶段左右键改字母光标，否则改列表选中行。
+     * steps：左键 -1、右键 +1；短按调用一次，长按由 ClickWheel 循环调用实现连续移动。
+     */
+    fun moveSelection(steps: Int) {
+        if (node is WheelNode.Search && searchPhase == 0) {
+            val n = searchChars.length
+            searchChar = ((searchChar + steps) % n + n) % n
+        } else if (items.isNotEmpty()) {
+            selected = (selected + steps).coerceIn(0, items.lastIndex)
+        }
+    }
+
     // 沉浸：横屏 CoverFlow 全屏；竖屏保留系统栏（状态栏常驻，避免历史黑带问题）。
     val app = MusicBoxApp.instance
     val immersive = isLandscape
@@ -455,22 +469,17 @@ internal fun WheelHome(
                     isPlaying = isPlaying,
                     centerActive = false,
                     dark = true,
-                    onRotate = { steps ->
-                        if (node is WheelNode.Search && searchPhase == 0) {
-                            val n = searchChars.length
-                            searchChar = ((searchChar + steps) % n + n) % n
-                        } else if (items.isNotEmpty()) {
-                            selected = (selected + steps).coerceIn(0, items.lastIndex)
-                        }
-                    },
+                    onRotate = { steps -> moveSelection(steps) },
                     onPlayPause = { if (isPlaying) PlayerController.pause() else PlayerController.play() },
-                    onPrevious = { PlayerController.previous() },
-                    onNext = { PlayerController.next() },
-                    onRewind = { PlayerController.seekTo((PlayerController.currentPositionMs() - 5_000L).coerceAtLeast(0)) },
-                    onForward = { PlayerController.seekTo(PlayerController.currentPositionMs() + 5_000L) },
+                    // 列表界面：左右键短按上一行 / 下一行，长按由 ClickWheel 循环调用连续移动行。
+                    onPrevious = { moveSelection(-1) },
+                    onNext = { moveSelection(1) },
+                    onRewind = { moveSelection(-1) },
+                    onForward = { moveSelection(1) },
                     onMenu = { onWheelMenu() },
                     onMenuHome = { home() },
-                    onConfirm = { onWheelConfirm() }
+                    onConfirm = { onWheelConfirm() },
+                    hapticOnLongRepeat = true
                 )
             }
         }

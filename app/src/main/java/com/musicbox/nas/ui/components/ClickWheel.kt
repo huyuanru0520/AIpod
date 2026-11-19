@@ -84,6 +84,8 @@ fun ClickWheel(
     onConfirm: () -> Unit,
     /** 中心键长按：播放页用它切换歌词界面；不传则无行为。 */
     onCenterLongPress: () -> Unit = {},
+    /** 左右键长按连续动作时是否每次震动（列表逐行移动需要；播放页快进快退保持默认 false）。 */
+    hapticOnLongRepeat: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -104,6 +106,7 @@ fun ClickWheel(
     val onMenuHomeRef = rememberUpdatedState(onMenuHome)
     val onConfirmRef = rememberUpdatedState(onConfirm)
     val onCenterLongPressRef = rememberUpdatedState(onCenterLongPress)
+    val hapticOnLongRepeatRef = rememberUpdatedState(hapticOnLongRepeat)
     var longFired by remember { mutableStateOf(false) }
     var centerDown by remember { mutableStateOf(false) }
     var bottomDown by remember { mutableStateOf(false) }
@@ -206,6 +209,10 @@ fun ClickWheel(
                                                 WheelZone.RIGHT -> onForwardRef.value()
                                                 WheelZone.TOP -> onMenuHomeRef.value()
                                                 else -> Unit
+                                            }
+                                            // 列表界面逐行移动时每行给一次震动反馈；播放页等保持默认关闭。
+                                            if (hapticOnLongRepeatRef.value && zone != WheelZone.TOP) {
+                                                Haptics.tick(context, view)
                                             }
                                             delay(REPEAT_MS)
                                         }
