@@ -2,7 +2,7 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-<!-- 推到自己的仓库后，把文末 compare 链接里的 your-name 替换成实际 GitHub 用户名；或直接删掉链接定义，改为纯文本标题。 -->
+<!-- 文末 compare 链接已指向实际 GitHub 仓库。 -->
 
 ## [4.4.0] - 2026-11-19
 
@@ -578,23 +578,23 @@ CoverFlow 滑动优化、转轮音效与震动强度可调，图标换成透明�
 
 初始版本：WebDAV / 飞牛 FnOS 音源接入、全库扫描与缓存、Media3 播放与通知栏控制、歌词与封面解析、CoverFlow 浏览。
 
-[1.3.0]: https://github.com/your-name/AIpod/compare/v1.2.5...v1.3.0
-[1.2.5]: https://github.com/your-name/AIpod/compare/v1.2.4...v1.2.5
-[1.2.4]: https://github.com/your-name/AIpod/compare/v1.2.3...v1.2.4
-[1.2.3]: https://github.com/your-name/AIpod/compare/v1.2.2...v1.2.3
-[1.2.2]: https://github.com/your-name/AIpod/compare/v1.2.1...v1.2.2
-[1.2.1]: https://github.com/your-name/AIpod/compare/v1.2.0...v1.2.1
-[1.2.0]: https://github.com/your-name/AIpod/compare/v1.1.2...v1.2.0
-[1.1.2]: https://github.com/your-name/AIpod/compare/v1.1.1...v1.1.2
-[1.1.1]: https://github.com/your-name/AIpod/compare/v1.1.0...v1.1.1
-[1.1.0]: https://github.com/your-name/AIpod/compare/v1.0.44...v1.1.0
-[1.0.44]: https://github.com/your-name/AIpod/compare/v1.0.43...v1.0.44
-[1.0.43]: https://github.com/your-name/AIpod/compare/v1.0.42...v1.0.43
-[1.0.42]: https://github.com/your-name/AIpod/compare/v1.0.41...v1.0.42
-[1.0.41]: https://github.com/your-name/AIpod/compare/v1.0.40...v1.0.41
-[1.0.40]: https://github.com/your-name/AIpod/compare/v1.0.39...v1.0.40
-[1.0.39]: https://github.com/your-name/AIpod/compare/v1.0.38...v1.0.39
-[1.0.38]: https://github.com/your-name/AIpod/compare/v1.0.37...v1.0.38
-[1.0.37]: https://github.com/your-name/AIpod/compare/v1.0.36...v1.0.37
-[1.0.36]: https://github.com/your-name/AIpod/compare/v1.0.35...v1.0.36
-[1.0.35]: https://github.com/your-name/AIpod/compare/v1.0.0...v1.0.35
+[1.3.0]: https://github.com/huyuanru0520/AIpod/compare/v1.2.5...v1.3.0
+[1.2.5]: https://github.com/huyuanru0520/AIpod/compare/v1.2.4...v1.2.5
+[1.2.4]: https://github.com/huyuanru0520/AIpod/compare/v1.2.3...v1.2.4
+[1.2.3]: https://github.com/huyuanru0520/AIpod/compare/v1.2.2...v1.2.3
+[1.2.2]: https://github.com/huyuanru0520/AIpod/compare/v1.2.1...v1.2.2
+[1.2.1]: https://github.com/huyuanru0520/AIpod/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/huyuanru0520/AIpod/compare/v1.1.2...v1.2.0
+[1.1.2]: https://github.com/huyuanru0520/AIpod/compare/v1.1.1...v1.1.2
+[1.1.1]: https://github.com/huyuanru0520/AIpod/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/huyuanru0520/AIpod/compare/v1.0.44...v1.1.0
+[1.0.44]: https://github.com/huyuanru0520/AIpod/compare/v1.0.43...v1.0.44
+[1.0.43]: https://github.com/huyuanru0520/AIpod/compare/v1.0.42...v1.0.43
+[1.0.42]: https://github.com/huyuanru0520/AIpod/compare/v1.0.41...v1.0.42
+[1.0.41]: https://github.com/huyuanru0520/AIpod/compare/v1.0.40...v1.0.41
+[1.0.40]: https://github.com/huyuanru0520/AIpod/compare/v1.0.39...v1.0.40
+[1.0.39]: https://github.com/huyuanru0520/AIpod/compare/v1.0.38...v1.0.39
+[1.0.38]: https://github.com/huyuanru0520/AIpod/compare/v1.0.37...v1.0.38
+[1.0.37]: https://github.com/huyuanru0520/AIpod/compare/v1.0.36...v1.0.37
+[1.0.36]: https://github.com/huyuanru0520/AIpod/compare/v1.0.35...v1.0.36
+[1.0.35]: https://github.com/huyuanru0520/AIpod/compare/v1.0.0...v1.0.35

@@ -58,7 +58,7 @@ AIpod 不建索引库、不依赖服务端插件，直接用 WebDAV 协议扫你
 ## 构建
 
 ```bash
-git clone https://github.com/<your-name>/AIpod.git
+git clone https://github.com/huyuanru0520/AIpod.git
 cd AIpod
 
 # 指向本机 SDK（或直接用 Android Studio 打开，会自动生成）
