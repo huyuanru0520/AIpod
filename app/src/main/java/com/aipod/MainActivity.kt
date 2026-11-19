@@ -274,9 +274,27 @@ class MainActivity : ComponentActivity() {
                 requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
             }
         }
+        // USB 独占（实验性）：仅当设置开关开启时才接管 USB DAC 的 attach 事件，
+        // 以便在内核 snd-usb-audio 绑定前抢到设备。开关关闭时完全不碰 USB，避免影响系统音频。
+        handleUsbAttach(intent)
         CrashLogger.mark("setContent enter")
         setContent { AppRoot() }
         CrashLogger.mark("setContent returned")
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleUsbAttach(intent)
+    }
+
+    /** 只在 USB 独占开关开启时接管 DAC attach 事件。 */
+    private fun handleUsbAttach(intent: android.content.Intent) {
+        if (!MusicBoxApp.instance.usbExclusive.value) return
+        if (intent.action != android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED) return
+        runCatching {
+            com.decent.usbaudio.UsbAudioPermissionHelper.handleIntent(applicationContext, intent)
+            com.aipod.audio.UsbExclusiveAudio.refreshStatus(applicationContext, true)
+        }.onFailure { CrashLogger.error("UsbAttach", it) }
     }
 
     override fun onStop() {

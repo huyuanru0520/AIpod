@@ -4,6 +4,16 @@
 
 <!-- 推到自己的仓库后，把文末 compare 链接里的 your-name 替换成实际 GitHub 用户名；或直接删掉链接定义，改为纯文本标题。 -->
 
+## [4.3.0] - 2026-11-19
+
+### 新增（实验性）
+- **USB 独占输出**：设置页新增「USB 独占输出（实验）」开关，默认关闭。开启后检测到已授权的 UAC2 USB DAC 时，用 decent-player（MIT）的用户态驱动把 PCM 直送 DAC，绕过 AudioFlinger / SRC，实现真正的 bit-perfect（本机已诊断不支持系统原生 bit-perfect，故采用用户态方案）。
+  - vendor `decent-usb-audio-driver`（native UAC2 驱动 + libflac JNI，arm64-v8a / armeabi-v7a）与 `decent-usb-audio-wrapper-media3`（UsbAudioSink）两个模块；裁掉不需要的 SFTP/JSch 与 FLAC decoder 模块。
+  - 隔离式接入：开关关闭或 DAC 未就绪/未授权时完全走原标准 ExoPlayer；USB 链路构建失败自动回退，绝不影响普通播放。
+  - Manifest 声明 USB Host（required=false）+ DAC 插入事件；仅在开关开启时接管设备，关闭时不碰 USB。
+  - 开关切换后自动重建播放器并恢复队列/进度；DataStore 持久化，随设置导入导出。
+  - 提示：需 OTG 连接 UAC2 DAC，首次插入会弹 USB 授权；本地 FLAC 走 native 引擎直出，网络无损流经 ExoPlayer float 管道直出。
+
 ## [4.1.0] - 2026-11-19
 
 ### 优化

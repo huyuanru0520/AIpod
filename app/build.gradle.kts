@@ -30,8 +30,8 @@ android {
         // Media3 1.9.3 (media3-session) 要求 minSdk >= 23
         minSdk = 23
         targetSdk = 34
-        versionCode = 104
-        versionName = "4.2.2"
+        versionCode = 105
+        versionName = "4.3.0"
     }
 
     signingConfigs {
@@ -119,6 +119,10 @@ dependencies {
     // FFmpeg 软解码扩展：改用 Jellyfin 维护的 1.9.0+1（旧本地 AAR 按 1.5.1 的 Decoder 接口编译，不兼容 1.9.3）。
     // 其 POM 依赖 media3 1.9.0，Gradle 会解析到本工程声明的 1.9.3，版本一致。
     implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
+
+    // USB 独占输出（实验性，默认关）：vendor 自 decent-player（MIT）的用户态 UAC2 驱动。
+    // 仅在用户于设置页开启且检测到 USB DAC 时启用，失败自动回退到标准 ExoPlayer。
+    implementation(project(":decentwrapper"))
 
     // Networking / JSON
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

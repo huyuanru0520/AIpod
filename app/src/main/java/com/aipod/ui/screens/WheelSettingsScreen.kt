@@ -117,6 +117,7 @@ fun WheelSettingsScreen(navController: NavController) {
     // 所有设置状态
     val sourceMode by app.sourceMode.collectAsState()
     val audioQuality by app.audioQuality.collectAsState()
+    val usbExclusive by app.usbExclusive.collectAsState()
     val scanPace by app.scanPaceMs.collectAsState()
     val visibleTabs by app.visibleTabs.collectAsState()
     val debugMode by app.debugMode.collectAsState()
@@ -232,8 +233,8 @@ fun WheelSettingsScreen(navController: NavController) {
 
     // 构建当前页条目
     val items: List<SettingItem> = when (node) {
-        SettingsNode.Root -> buildRootSettings(
-            sourceMode, audioQuality, scanPace, hapticStrength, debugMode, showDescriptions,
+        SettingsNode.Root ->         buildRootSettings(
+            sourceMode, audioQuality, usbExclusive, scanPace, hapticStrength, debugMode, showDescriptions,
             webDav, fnos, webDavScanning, coverCacheSize, transcodeSize, localCount, localScanning, localScanProgress,
             !localFolderUri.isNullOrBlank()
         )
@@ -280,6 +281,23 @@ fun WheelSettingsScreen(navController: NavController) {
                 }
             }
             is SettingItem.Toggle -> when (item.key) {
+                "usbexclusive" -> scope.launch {
+                    val next = !usbExclusive
+                    app.setUsbExclusive(next)
+                    // 重建播放器使新链路生效（失败会内部回退到标准 ExoPlayer）
+                    val rebuilt = withContext(Dispatchers.Main) {
+                        com.aipod.player.PlayerHolder.rebuild(context.applicationContext)
+                    }
+                    if (rebuilt != null) {
+                        com.aipod.player.PlayerController.reattachAfterRebuild(context.applicationContext)
+                        val st = com.aipod.audio.UsbExclusiveAudio.currentStatus()
+                        statusLine = if (next)
+                            "USB 独占：${st.label} · 链路=${com.aipod.player.PlayerHolder.activeOutput}"
+                        else "已关闭 USB 独占，回到标准输出"
+                    } else {
+                        statusLine = "播放器重建失败，请查看日志"
+                    }
+                }
                 "debug" -> scope.launch { app.setDebugMode(!debugMode) }
                 "descriptions" -> scope.launch { app.setShowDescriptions(!showDescriptions) }
                 "tabcheck" -> {
@@ -530,7 +548,7 @@ private fun SettingItem.subtitle(): String = when (this) {
 }
 
 private fun buildRootSettings(
-    source: SourceMode, quality: AudioQuality,
+    source: SourceMode, quality: AudioQuality, usbExclusive: Boolean,
     scanPace: Long, haptic: Int, debug: Boolean, showDescriptions: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
     coverSize: Long, transcodeSize: Long, localCount: Int, localScanning: Boolean, localScanProgress: String,
     hasLocalFolder: Boolean
@@ -547,6 +565,12 @@ private fun buildRootSettings(
     out += SettingItem.Choice("source", "音乐源", sourceName, Icons.Default.MusicNote)
     out += SettingItem.Nav("tabs", "主界面栏目", "勾选并调整顺序", Icons.Default.List)
     out += SettingItem.Choice("quality", "播放音质", qualityName, Icons.Default.Audiotrack)
+    val usbState = com.aipod.audio.UsbExclusiveAudio.currentStatus()
+    out += SettingItem.Toggle(
+        "usbexclusive", "USB 独占输出（实验）",
+        if (usbExclusive) "已开启 · ${usbState.label}" else "关闭 · 点按需接管 USB DAC",
+        Icons.Default.Settings
+    )
     out += SettingItem.Choice("scanpace", "扫描节奏", paceName, Icons.Default.Speed)
     out += SettingItem.Choice("haptic", "震动强度", hapticName, Icons.Default.Vibration)
     out += SettingItem.Nav("webdav", "WebDAV 连接", if (webDav != null) "已配置" else "未配置", Icons.Default.Link)

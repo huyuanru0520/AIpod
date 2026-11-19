@@ -167,14 +167,37 @@ object PlayerController {
 
     /** 组合完成后调用：创建/复用 player、注册监听、异步建立媒体会话。 */
     fun attach(context: Context) {
+        attachInternal(context, rebuild = false)
+    }
+
+    /**
+     * 切换 USB 独占输出后重建播放器：强制重新绑定监听并恢复播放位置。
+     * 与 attach 不同，这里 player 一定已被 PlayerHolder 换成新实例，需清掉旧引用重新挂。
+     */
+    fun reattachAfterRebuild(context: Context) {
+        val snapshotPos = runCatching { player?.currentPosition ?: 0L }.getOrDefault(0L)
+        val snapshotPlaying = player?.isPlaying ?: false
+        val q = _queue.value
+        val idx = _currentIndex.value
+        // 旧 player 已被 PlayerHolder.release，清引用后重新绑定
+        player = null
+        attachInternal(context.applicationContext, rebuild = true)
+        // 恢复队列与进度：重建后的播放器是空的
+        if (q.isNotEmpty() && idx in q.indices) {
+            playTracks(q, idx, snapshotPos, autoPlay = snapshotPlaying)
+        }
+        CrashLogger.info("PlayerController", "播放器重建完成，输出链路=${PlayerHolder.activeOutput}，进度=${snapshotPos}ms")
+    }
+
+    private fun attachInternal(context: Context, rebuild: Boolean) {
         appContext = context.applicationContext
-        val p = PlayerHolder.getOrCreate(context.applicationContext)
+        val p = if (rebuild) PlayerHolder.get() else PlayerHolder.getOrCreate(context.applicationContext)
         if (p == null) {
             CrashLogger.error("PlayerController.attach", IllegalStateException("ExoPlayer 创建失败"))
             _error.value = "播放器初始化失败：" + (PlayerHolder.lastError ?: "请查看日志")
             return
         }
-        if (player === p) return
+        if (player === p && !rebuild) return
         player = p
         runCatching {
             p.addListener(object : Player.Listener {

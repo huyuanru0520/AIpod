@@ -13,6 +13,8 @@
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
+    <!-- USB 独占输出（实验性）：声明 USB Host 但非必需，无 DAC 机型照常安装 -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <application
         android:name=".MusicBoxApp"
@@ -35,6 +37,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- USB DAC 插入时让本应用有机会在内核驱动绑定前接管（仅开关开启时真正处理） -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_audio_device_filter" />
         </activity>
 
         <service

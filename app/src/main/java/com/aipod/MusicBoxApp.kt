@@ -179,6 +179,13 @@ class MusicBoxApp : Application() {
     val visibleTabs = MutableStateFlow<List<String>>(LibraryTabs.default)
     /** 播放音质：默认原采样率直通。 */
     val audioQuality = MutableStateFlow(AudioQuality.ORIGINAL)
+
+    /**
+     * USB 独占输出（实验性，默认关）：开启且检测到已授权的 UAC2 DAC 时，
+     * PlayerHolder 会用 UsbAudioSink 直送 PCM 到 DAC，绕过 Android 音频栈。
+     * 任何失败都会自动回退到标准 ExoPlayer，不影响普通播放。
+     */
+    val usbExclusive = MutableStateFlow(false)
     /** 转轮音量：0f~1f，设置后立即写入 ExoPlayer 并落盘。 */
     val volume = MutableStateFlow(1f)
     /**
@@ -425,6 +432,17 @@ class MusicBoxApp : Application() {
         dataStore.edit { it[Q_QUALITY] = q.name }
     }
 
+    /**
+     * 切换 USB 独占输出开关。开启时先在 IO 线程探测 DAC/权限并刷新状态，
+     * 真正的播放器链路切换由下次 PlayerHolder 重建时生效（设置页会提示重启或切歌）。
+     */
+    suspend fun setUsbExclusive(on: Boolean) {
+        usbExclusive.value = on
+        dataStore.edit { it[USB_EXCLUSIVE] = on }
+        com.aipod.audio.UsbExclusiveAudio.refreshStatus(this, on)
+        CrashLogger.info("Settings", "USB 独占输出=${if (on) "开启" else "关闭"}，状态=${com.aipod.audio.UsbExclusiveAudio.currentStatus().label}")
+    }
+
     suspend fun setVolume(v: Float) {
         val safe = v.coerceIn(0f, 1f)
         volume.value = safe
@@ -543,6 +561,11 @@ class MusicBoxApp : Application() {
             if (ordered.isNotEmpty()) visibleTabs.value = ordered
         }
         p[Q_QUALITY]?.let { runCatching { audioQuality.value = AudioQuality.valueOf(it) } }
+        // USB 独占输出（默认关）：恢复开关并探测一次当前 DAC 状态（只读，不切链路）
+        usbExclusive.value = p[USB_EXCLUSIVE] ?: false
+        if (usbExclusive.value) {
+            com.aipod.audio.UsbExclusiveAudio.refreshStatus(this, true)
+        }
         p[P_VOLUME]?.let { runCatching { volume.value = it.coerceIn(0f, 1f) } }
         // 调试模式：从持久化读取并同步给 CrashLogger（默认关闭，避免常驻日志 I/O）
         val dbg = p[D_DEBUG] ?: false
@@ -929,6 +952,7 @@ class MusicBoxApp : Application() {
             put("source_mode", sourceMode.value.name)
             put("visible_tabs", visibleTabs.value.joinToString(","))
             put("audio_quality", audioQuality.value.name)
+            put("usb_exclusive", usbExclusive.value)
             put("debug_mode", debugMode.value)
             put("show_descriptions", showDescriptions.value)
             put("haptic_strength", hapticStrength.value)
@@ -984,6 +1008,7 @@ class MusicBoxApp : Application() {
         }
         o.optString("audio_quality").takeIf { it.isNotBlank() }
             ?.let { runCatching { setAudioQuality(AudioQuality.valueOf(it)) } }
+        if (o.has("usb_exclusive")) setUsbExclusive(o.optBoolean("usb_exclusive"))
         if (o.has("debug_mode")) setDebugMode(o.optBoolean("debug_mode"))
         if (o.has("show_descriptions")) setShowDescriptions(o.optBoolean("show_descriptions"))
         if (o.has("haptic_strength")) setHapticStrength(o.optInt("haptic_strength"))
@@ -1066,6 +1091,8 @@ private val T_TABS = stringPreferencesKey("visible_tabs")
 /** 标记 visible_tabs 是否已按「有序列表」格式保存（老版本是无序 Set）。 */
 private val T_TABS_ORDERED = booleanPreferencesKey("visible_tabs_ordered_v2")
 private val Q_QUALITY = stringPreferencesKey("audio_quality")
+/** USB 独占输出（实验性，默认关）。 */
+private val USB_EXCLUSIVE = booleanPreferencesKey("usb_exclusive")
 private val P_VOLUME = floatPreferencesKey("wheel_volume")
 private val D_DEBUG = booleanPreferencesKey("debug_mode")
 private val T_SHOW_DESC = booleanPreferencesKey("show_descriptions")

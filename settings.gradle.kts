@@ -16,3 +16,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "AIpod"
 include(":app")
+// USB 独占输出（vendor 自 decent-player，MIT）：用户态 UAC2 驱动 + Media3 AudioSink 包装层
+include(":decentdriver")
+include(":decentwrapper")
