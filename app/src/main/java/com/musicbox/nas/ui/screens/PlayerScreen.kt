@@ -234,11 +234,6 @@ fun PlayerScreen(navController: NavController) {
             }
 
             Column(Modifier.fillMaxSize().navigationBarsPadding()) {
-                IpodTopBar(
-                    showLyrics = showLyrics,
-                    onBack = { navController.popBackStack() }
-                )
-
                 // 播放错误直接可见（错误码 + 描述），完整堆栈写入「下载」目录日志
                 if (playError != null) {
                     Row(
@@ -546,39 +541,6 @@ private fun WheelProgressHud(durationMs: Long) {
         }
         Spacer(Modifier.height(6.dp))
         Text("滚轮快进快退 · 再按一次中心键退出", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.45f))
-    }
-}
-
-/**
- * 播放页顶栏：返回 /「正在播放」。
- * 右上角的播放队列与更多菜单已移除——歌词由长按中心键切换，歌曲详情由长按播放键进入。
- */
-@Composable
-private fun IpodTopBar(
-    showLyrics: Boolean,
-    onBack: () -> Unit
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(start = 4.dp, end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        IconButton(onClick = onBack) {
-            Icon(Icons.Default.ArrowBack, contentDescription = "返回", tint = Color.White)
-        }
-        Column(Modifier.weight(1f)) {
-            Text(
-                "正在播放",
-                style = MaterialTheme.typography.titleSmall,
-                color = Color.White
-            )
-            Text(
-                if (showLyrics) "歌词" else "iPod 转轮",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.55f)
-            )
-        }
     }
 }
 
