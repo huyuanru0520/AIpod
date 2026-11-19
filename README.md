@@ -43,7 +43,9 @@ AIpod 不建索引库、不依赖服务端插件，直接用 WebDAV 协议扫你
 
 ## 截图
 
-> 仓库暂未放置截图，欢迎提 PR 补充。播放页、CoverFlow、曲库列表三张即可。
+| 播放页（点击轮） | 横屏 CoverFlow |
+| --- | --- |
+| ![播放页](docs/screenshots/player.png) | ![CoverFlow](docs/screenshots/coverflow.png) |
 
 ## 环境要求
 
