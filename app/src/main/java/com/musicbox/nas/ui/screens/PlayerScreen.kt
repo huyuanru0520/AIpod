@@ -151,6 +151,11 @@ fun PlayerScreen(navController: NavController) {
     var volumeActive by remember { mutableStateOf(false) }   // 滚轮调音量时，进度条就地变音量条
     var menuOpen by remember { mutableStateOf(false) }      // MENU：本页队列列表
     var progressMode by remember { mutableStateOf(false) }   // 中心键：进度模式
+    // 进度模式下滚轮调进度的本地累积值：不依赖播放器异步位置，做到逐格连续、精确到秒、快速滑动跟手。
+    // null = 尚未进入进度调节（进度条照常显示实时播放位置）；非 null = 用户正在用滚轮调，显示这个值。
+    var wheelSeekMs by remember { mutableStateOf<Long?>(null) }
+    // 相邻滚轮事件时间戳：用于判定快慢转（慢转 1 秒/格精调，快转 5 秒/格快进）
+    var lastSeekAt by remember { mutableStateOf(0L) }
     var selectedQueueIndex by remember { mutableStateOf(idx.coerceAtLeast(0)) }
     LaunchedEffect(menuOpen) { if (menuOpen) selectedQueueIndex = idx.coerceAtLeast(0) }
     LaunchedEffect(idx) { if (!menuOpen) selectedQueueIndex = idx.coerceAtLeast(0) }
@@ -195,11 +200,37 @@ fun PlayerScreen(navController: NavController) {
                 showLyrics -> "lyrics"
                 else -> "cover"
             }
-            // 长按快退/快进：直接读播放器当前位置，不订阅 position，避免整页每 500ms 重组
+            // 按键快退/快进（上一首/下一首/±键）：固定 5 秒一格，基于本地累积值推进。
             fun seekBy(deltaMs: Long) {
-                val base = PlayerController.currentPositionMs()
+                val base = wheelSeekMs ?: PlayerController.currentPositionMs()
                 val next = (base + deltaMs).coerceIn(0L, duration.coerceAtLeast(0L))
-                PlayerController.seekTo(next)
+                wheelSeekMs = next
+                // 按键离散、频率低，正常落盘即可
+                PlayerController.seekTo(next, persist = true)
+            }
+
+            // 滚轮调进度：基于本地累积值 wheelSeekMs 逐格推进，不读播放器异步位置。
+            // 慢转（间隔 ≥ 100ms）精确到 1 秒/格；快速滑动（间隔 < 100ms）自动放大步长快进。
+            // 关键是快速连续事件都在上一格基础上累加，进度条即时跟手、不回跳、不卡顿。
+            fun seekByWheel(steps: Int) {
+                val now = System.currentTimeMillis()
+                val fast = lastSeekAt > 0L && (now - lastSeekAt) < 100L
+                lastSeekAt = now
+                val stepMs = if (fast) 5_000L else 1_000L
+                val base = wheelSeekMs ?: PlayerController.currentPositionMs()
+                val next = (base + steps * stepMs).coerceIn(0L, duration.coerceAtLeast(0L))
+                wheelSeekMs = next
+                // 滚动过程不写盘（persist=false），退出进度模式时统一落盘一次
+                PlayerController.seekTo(next, persist = false)
+            }
+
+            // 退出进度模式：把最终位置落盘一次，并清除本地累积值让进度条恢复显示实时位置
+            fun exitProgressMode() {
+                if (progressMode) {
+                    wheelSeekMs?.let { PlayerController.seekTo(it, persist = true) }
+                }
+                wheelSeekMs = null
+                progressMode = false
             }
 
             Column(Modifier.fillMaxSize().navigationBarsPadding()) {
@@ -302,6 +333,9 @@ fun PlayerScreen(navController: NavController) {
                                     inactiveColor = Color.White.copy(alpha = 0.22f),
                                     labelColor = Color.White.copy(alpha = 0.6f),
                                     emphasized = progressMode,
+                                    // 进度模式滚轮调进度时，用本地累积值即时驱动进度条，做到连续跟手；
+                                    // 非调进度时传 null，进度条照常显示实时播放位置。
+                                    wheelPosition = if (progressMode) wheelSeekMs else null,
                                     onSeek = { PlayerController.seekTo(it) }
                                 )
                             }
@@ -321,8 +355,9 @@ fun PlayerScreen(navController: NavController) {
                                 }
                                 progressMode -> {
                                     // 进度模式优先：封面 / 歌词界面按了中心键进进度模式后，
-                                    // 滚轮一律快进快退歌曲，而不是继续滚歌词（需求2）。
-                                    seekBy(steps * 5_000L)
+                                    // 滚轮一律调歌曲进度，而不是继续滚歌词（需求2）。
+                                    // 慢转 1 秒/格精确到秒，快滑自动放大步长，全程本地累积不卡顿。
+                                    seekByWheel(steps)
                                 }
                                 showLyrics -> {
                                     // 歌词界面（非进度模式）：滚轮直接滚动歌词
@@ -342,8 +377,8 @@ fun PlayerScreen(navController: NavController) {
                         onNext = { if (progressMode) seekBy(5_000L) else PlayerController.next() },
                         onRewind = { seekBy(-5_000L) },
                         onForward = { seekBy(5_000L) },
-                        onMenu = { menuOpen = !menuOpen; if (!menuOpen) progressMode = false },
-                        onMenuHome = { menuOpen = false; progressMode = false; navController.popBackStack("library", false) },
+                        onMenu = { menuOpen = !menuOpen; if (!menuOpen) exitProgressMode() },
+                        onMenuHome = { menuOpen = false; exitProgressMode(); navController.popBackStack("library", false) },
                         onConfirm = {
                             when {
                                 menuOpen -> {
@@ -353,13 +388,21 @@ fun PlayerScreen(navController: NavController) {
                                     }
                                 }
                                 // 短按中心键：封面 / 歌词界面统一切换进度模式
-                                else -> progressMode = !progressMode
+                                else -> {
+                                    if (progressMode) exitProgressMode()
+                                    else {
+                                        // 进入进度模式：以当前播放位置作为本地累积起点
+                                        lastSeekAt = 0L
+                                        wheelSeekMs = PlayerController.currentPositionMs()
+                                        progressMode = true
+                                    }
+                                }
                             }
                         },
                         // 长按中心键：切换歌词界面（取消原顶栏歌词按钮）
                         onCenterLongPress = {
                             showLyrics = !showLyrics
-                            progressMode = false
+                            exitProgressMode()
                         },
                         // 略微上移，避免整块压在屏幕底部
                         modifier = Modifier
@@ -910,13 +953,17 @@ private fun SeekBar(
     labelColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     /** 进度模式：把红色进度标记加粗，作为「正在调进度」的就地反馈。 */
     emphasized: Boolean = false,
+    /** 滚轮调进度时的本地累积位置：非 null 时优先显示它，做到逐格跟手、不受 500ms 轮询滞后影响。 */
+    wheelPosition: Long? = null,
     onSeek: (Long) -> Unit
 ) {
     // 进度在此处自行订阅：500ms 的更新只会让这条进度条重组，不再牵动整页。
     val livePosition by PlayerController.position.collectAsState()
     var drag by remember(duration) { mutableStateOf<Float?>(null) }
     val maxRange = duration.coerceAtLeast(1).toFloat()
-    val shown = drag ?: livePosition.toFloat().coerceIn(0f, maxRange)
+    // 优先级：本地拖动 > 滚轮累积值 > 实时播放位置
+    val displayMs = wheelPosition ?: livePosition
+    val shown = drag ?: displayMs.toFloat().coerceIn(0f, maxRange)
     val trackH = if (emphasized) 8.dp else 3.dp
     val thumbS = if (emphasized) 16.dp else 10.dp
 

@@ -482,10 +482,14 @@ object PlayerController {
             }
         }.onFailure { logCtrl(if (forward) "next" else "previous", it) }
     }
-    fun seekTo(posMs: Long) {
+    /**
+     * @param persist 是否立即落盘。滚轮连续调进度时逐格写整份队列 JSON 会明显卡顿，
+     *                调用方在滚动过程中传 false，退出进度模式时再统一落盘一次。
+     */
+    fun seekTo(posMs: Long, persist: Boolean = true) {
         runCatching { player?.seekTo(posMs) }.onFailure { logCtrl("seekTo", it) }
         // 暂停态下轮询不会落盘，手动拖动进度后强制保存一次
-        persistSnapshot(force = true)
+        if (persist) persistSnapshot(force = true)
     }
     /** 转轮调整音量：ExoPlayer 的 0f~1f 线性增益。 */
     fun setVolume(v: Float) {
