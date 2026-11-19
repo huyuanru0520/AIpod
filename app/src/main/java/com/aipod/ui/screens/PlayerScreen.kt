@@ -172,6 +172,10 @@ fun PlayerScreen(navController: NavController) {
     // 进度模式下滚轮调进度的本地累积值：不依赖播放器异步位置，做到逐格连续、精确到秒、快速滑动跟手。
     // null = 尚未进入进度调节（进度条照常显示实时播放位置）；非 null = 用户正在用滚轮调，显示这个值。
     var wheelSeekMs by remember { mutableStateOf<Long?>(null) }
+    // 进入进度模式时的位置基准：退出时只有真正调整过进度才 seek。
+    // 否则「点一下进、点一下出」会对着旧位置做一次无谓 seek，ExoPlayer 重新缓冲 /
+    // USB 独占流重置，表现为「音乐暂停一下」。
+    var progressStartMs by remember { mutableStateOf(0L) }
     // 相邻滚轮事件时间戳：用于判定快慢转（慢转 1 秒/格精调，快转 5 秒/格快进）
     var lastSeekAt by remember { mutableStateOf(0L) }
     var selectedQueueIndex by remember { mutableStateOf(idx.coerceAtLeast(0)) }
@@ -224,6 +228,7 @@ fun PlayerScreen(navController: NavController) {
                 val base = wheelSeekMs ?: PlayerController.currentPositionMs()
                 val next = (base + deltaMs).coerceIn(0L, duration.coerceAtLeast(0L))
                 wheelSeekMs = next
+                progressStartMs = next   // 已立即 seek，同步基准，退出时不再重复 seek
                 // 按键离散、频率低，正常落盘即可
                 PlayerController.seekTo(next, persist = true)
             }
@@ -252,10 +257,15 @@ fun PlayerScreen(navController: NavController) {
                 wheelSeekMs = next
             }
 
-            // 退出进度模式：把最终位置落盘一次，并清除本地累积值让进度条恢复显示实时位置
+            // 退出进度模式：只在真正调整过进度时才 seek。
+            // 若只是「点一下进、点一下出」没滚动，wheelSeekMs 仍是进入时的位置快照，
+            // 此时 seek 等于对旧位置做无谓跳转 → 音频缓冲中断（音乐暂停一下）。
             fun exitProgressMode() {
                 if (progressMode) {
-                    wheelSeekMs?.let { PlayerController.seekTo(it, persist = true) }
+                    val target = wheelSeekMs
+                    if (target != null && kotlin.math.abs(target - progressStartMs) >= 250L) {
+                        PlayerController.seekTo(target, persist = true)
+                    }
                 }
                 wheelSeekMs = null
                 progressMode = false
@@ -416,9 +426,11 @@ fun PlayerScreen(navController: NavController) {
                                 else -> {
                                     if (progressMode) exitProgressMode()
                                     else {
-                                        // 进入进度模式：以当前播放位置作为本地累积起点
+                                        // 进入进度模式：以当前播放位置作为本地累积起点，同时记下基准
                                         lastSeekAt = 0L
-                                        wheelSeekMs = PlayerController.currentPositionMs()
+                                        val pos = PlayerController.currentPositionMs()
+                                        wheelSeekMs = pos
+                                        progressStartMs = pos
                                         progressMode = true
                                     }
                                 }
