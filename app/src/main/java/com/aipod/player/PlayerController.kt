@@ -454,6 +454,20 @@ object PlayerController {
         }
         // 兜底：setMediaItems 之后即便没有触发 onMediaItemTransition，也把首曲封面写进通知
         pushArtwork(idx, first)
+        // 音源真实性探测（仅调试模式、仅当前首曲、异步，不影响播放链路）：
+        // 用一次极小 Range 请求读取响应头与文件头魔数，判定飞牛/WebDAV 返回的是原始无损字节
+        // 还是被服务端转码成了 mp3/aac。结论写入日志，供设置页查看/导出。
+        if (MusicBoxApp.instance.debugMode.value && first.streamUrl.startsWith("http", ignoreCase = true)) {
+            scope.launch {
+                runCatching {
+                    com.aipod.data.AudioSourceProbe.probeAndLog(
+                        first,
+                        MusicBoxApp.instance.okHttpClient,
+                        "Probe.${first.source}"
+                    )
+                }.onFailure { CrashLogger.error("Probe", it) }
+            }
+        }
         // 选「AAC 256kbps」时，后台把后面几首转成 256k AAC，轮到播放时自动换成缓存文件；
         // 当前这首直接原码率播放（转码要下载整文件，等待会明显拖慢起播）。
         if (MusicBoxApp.instance.audioQuality.value == AudioQuality.AAC_256) {
