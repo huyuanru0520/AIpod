@@ -63,6 +63,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -74,6 +75,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.alpha
@@ -128,6 +130,13 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
+ * CoverFlow 切歌翻页动画时长；同时作为滚轮切歌节流间隔，保证一次动画完整播完。
+ * 240ms 是权衡值：转一圈约切 8 首（不至于像没有节流时一转几十首、动画全被打断，
+ * 也不像 480ms 时一圈才 4 首太少）。改大 = 切歌更慢动画更从容，改小 = 更快更多。
+ */
+private const val COVER_FLOW_DURATION_MS = 240L
+
+/**
  * 播放页：专辑封面与歌词整合在同一屏 —— 顶部是当前歌曲的小封面与信息，
  * 中间是随播放进度滚动的歌词，底部是进度条与「上一首 / 播放 / 下一首」三个按钮。
  * 随机、循环等模式开关统一收进「播放队列」列表页（见 [QueueSheet]）。
@@ -156,9 +165,14 @@ fun PlayerScreen(navController: NavController) {
     val shakeContext = LocalContext.current
     val shakeView = LocalView.current
     val volume by MusicBoxApp.instance.volume.collectAsState()
-    var volumeActive by remember { mutableStateOf(false) }   // 滚轮调音量时，进度条就地变音量条
     var menuOpen by remember { mutableStateOf(false) }      // MENU：本页队列列表
-    var progressMode by remember { mutableStateOf(false) }   // 中心键：进度模式
+    // 滚轮模式：0=默认（封面页滚轮切歌 / 歌词页滚轮滚歌词），1=音量，2=进度。
+    // 中心键短按在 0→2→1→0 间循环（进度在前、音量在后）；静止 1.5s 自动回到 0。
+    var wheelMode by remember { mutableIntStateOf(0) }
+    val volumeActive = wheelMode == 1
+    val progressMode = wheelMode == 2
+    // 模式空闲计时令牌：每次进入模式或操作滚轮都 +1，重置 1.5s 倒计时。
+    var modeIdleToken by remember { mutableIntStateOf(0) }
     // 摇一摇切换播放模式（随机 / 列表循环 / 单曲循环）：仅在播放队列页打开时监听。
     DisposableEffect(menuOpen) {
         if (!menuOpen) return@DisposableEffect onDispose { }
@@ -173,20 +187,27 @@ fun PlayerScreen(navController: NavController) {
     // null = 尚未进入进度调节（进度条照常显示实时播放位置）；非 null = 用户正在用滚轮调，显示这个值。
     var wheelSeekMs by remember { mutableStateOf<Long?>(null) }
     // 进入进度模式时的位置基准：退出时只有真正调整过进度才 seek。
-    // 否则「点一下进、点一下出」会对着旧位置做一次无谓 seek，ExoPlayer 重新缓冲 /
-    // USB 独占流重置，表现为「音乐暂停一下」。
     var progressStartMs by remember { mutableStateOf(0L) }
     // 相邻滚轮事件时间戳：用于判定快慢转（慢转 1 秒/格精调，快转 5 秒/格快进）
     var lastSeekAt by remember { mutableStateOf(0L) }
+    // 静止 1.5s 自动恢复默认滚轮模式：token 变化会取消旧倒计时并重新开始。
+    // 能执行到 delay 之后，说明期间没有新的滚轮操作/模式切换，即真正「静止」了 1.5s。
+    LaunchedEffect(modeIdleToken) {
+        if (wheelMode == 0 || modeIdleToken == 0) return@LaunchedEffect
+        kotlinx.coroutines.delay(1500L)
+        // 恢复前先提交未决的进度调整（若确实调整过），避免丢失用户最后的滚动位置
+        if (wheelMode == 2) {
+            val target = wheelSeekMs
+            if (target != null && kotlin.math.abs(target - progressStartMs) >= 250L) {
+                PlayerController.seekTo(target, persist = true)
+            }
+        }
+        wheelSeekMs = null
+        wheelMode = 0
+    }
     var selectedQueueIndex by remember { mutableStateOf(idx.coerceAtLeast(0)) }
     LaunchedEffect(menuOpen) { if (menuOpen) selectedQueueIndex = idx.coerceAtLeast(0) }
     LaunchedEffect(idx) { if (!menuOpen) selectedQueueIndex = idx.coerceAtLeast(0) }
-    LaunchedEffect(volumeActive) {
-        if (volumeActive) {
-            kotlinx.coroutines.delay(1600L)
-            volumeActive = false
-        }
-    }
 
     // 横屏：不再展示「横屏播放页」。转横屏时直接退回曲库首页的全屏 CoverFlow
     //（点击封面进专辑、左右滑动切换）。竖屏仍保留完整的 iPod 转轮播放页。
@@ -244,6 +265,7 @@ fun PlayerScreen(navController: NavController) {
             // 慢转（间隔 ≥ 100ms）精确到 1 秒/格；快速滑动（间隔 < 100ms）自动放大步长快进。
             // 关键是快速连续事件都在上一格基础上累加，进度条即时跟手、不回跳、不卡顿。
             fun seekByWheel(steps: Int) {
+                modeIdleToken++   // 有滚轮操作 → 重置 1.5s 空闲倒计时
                 val now = System.currentTimeMillis()
                 val fast = lastSeekAt > 0L && (now - lastSeekAt) < 100L
                 lastSeekAt = now
@@ -252,15 +274,54 @@ fun PlayerScreen(navController: NavController) {
                 val next = (base + steps * stepMs).coerceIn(0L, duration.coerceAtLeast(0L))
                 // 滚动期间只更新本地累积值驱动进度条即时跟手，不调用 player.seekTo。
                 // 网络流（飞牛/WebDAV）每次 seek 都要丢弃缓冲+重发 Range 请求+重新解码，
-                // 逐格真 seek 会造成「转一格卡一下」。真正的 seek 延后到退出进度模式时
-                // 由 exitProgressMode() 一次性提交，全程滚动零卡顿。
+                // 逐格真 seek 会造成「转一格卡一下」。真正的 seek 延后到松手/空闲时一次性提交。
                 wheelSeekMs = next
             }
 
-            // 退出进度模式：只在真正调整过进度时才 seek。
-            // 若只是「点一下进、点一下出」没滚动，wheelSeekMs 仍是进入时的位置快照，
-            // 此时 seek 等于对旧位置做无谓跳转 → 音频缓冲中断（音乐暂停一下）。
-            fun exitProgressMode() {
+            // 滚轮调音量：即时写音量，同样重置空闲倒计时。
+            fun rotateVolume(steps: Int) {
+                modeIdleToken++
+                val next = (MusicBoxApp.instance.volume.value + steps * 0.04f).coerceIn(0f, 1f)
+                scope.launch { MusicBoxApp.instance.setVolume(next) }
+            }
+
+            // 封面页默认滚轮行为：切歌。上一格 = 上一首，下一格 = 下一首。
+            // 节流已下沉到 ClickWheel 的 rotateIntervalMs（与音效震动同点控制、节奏严格对齐），
+            // 这里只管切歌本身，不再单独计时。
+            fun rotateSwitchSong(steps: Int) {
+                if (steps > 0) PlayerController.next() else PlayerController.previous()
+            }
+
+            // 中心键短按：在 默认 → 进度 → 音量 → 默认 间循环切换，并重置空闲倒计时。
+            // 进度更常用排在前面，音量不常用排在后面（模式数值不变：1=音量、2=进度）。
+            fun switchWheelMode() {
+                // 从进度模式切走时先提交未决进度：新顺序下进度不再是最后一档，
+                // idle 恢复分支只在 wheelMode==2 时兜底，这里补一次以防丢失。
+                // 正常松手已提交并同步基准，此处 abs<250 不会重复 seek。
+                if (progressMode) {
+                    val target = wheelSeekMs
+                    if (target != null && kotlin.math.abs(target - progressStartMs) >= 250L) {
+                        PlayerController.seekTo(target, persist = true)
+                        progressStartMs = target
+                    }
+                }
+                wheelMode = when (wheelMode) {
+                    0 -> 2
+                    2 -> 1
+                    else -> 0
+                }
+                modeIdleToken++
+                // 进入进度模式时以当前播放位置作为本地累积起点 + 基准
+                if (wheelMode == 2) {
+                    lastSeekAt = 0L
+                    val pos = PlayerController.currentPositionMs()
+                    wheelSeekMs = pos
+                    progressStartMs = pos
+                }
+            }
+
+            // 离开调节模式（MENU / 长按中心键 / 返回库首页）：提交未决进度并复位。
+            fun leaveWheelMode() {
                 if (progressMode) {
                     val target = wheelSeekMs
                     if (target != null && kotlin.math.abs(target - progressStartMs) >= 250L) {
@@ -268,7 +329,21 @@ fun PlayerScreen(navController: NavController) {
                     }
                 }
                 wheelSeekMs = null
-                progressMode = false
+                wheelMode = 0
+                modeIdleToken++
+            }
+
+            // 滚轮转动结束（松手）：进度模式下立即提交当前预览位置为真正的 seek，
+            // 但保持在进度模式（不切换 UI），直到静止 1.5s 由 idle 自动恢复默认模式。
+            fun commitWheelRelease() {
+                if (progressMode) {
+                    val target = wheelSeekMs
+                    if (target != null && kotlin.math.abs(target - progressStartMs) >= 250L) {
+                        PlayerController.seekTo(target, persist = true)
+                        progressStartMs = target   // 同步基准，空闲恢复时不再重复 seek
+                    }
+                    modeIdleToken++   // 松手也算一次操作，重新计时 1.5s
+                }
             }
 
             Column(Modifier.fillMaxSize().navigationBarsPadding()) {
@@ -352,12 +427,17 @@ fun PlayerScreen(navController: NavController) {
                         }
                     }
 
-                    // 进度条常驻（封面 / 歌词都显示）。滚轮调音量时，这条进度条就地
-                    // 替换成音量条（iPod 式）——不再弹独立提示框，封面尺寸不受影响。
-                    // 中心键进进度模式时进度条加粗红色标记，作为「正在调进度」反馈。
+                    // 进度条 / 音量条常驻（封面 / 歌词都显示）。两者放进固定高度容器，
+                    // 切换时高度恒定，上方 weight(1f) 的封面区不会被挤压缩放（需求3）。
                     if (!menuOpen) {
-                        Column(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
-                            if (volumeActive && !progressMode) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 26.dp)
+                                .height(52.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (volumeActive) {
                                 VolumeBar(volume = volume)
                             } else {
                                 SeekBar(
@@ -370,7 +450,7 @@ fun PlayerScreen(navController: NavController) {
                                     // 进度模式滚轮调进度时，用本地累积值即时驱动进度条，做到连续跟手；
                                     // 非调进度时传 null，进度条照常显示实时播放位置。
                                     wheelPosition = if (progressMode) wheelSeekMs else null,
-                                    onSeek = { PlayerController.seekTo(it) }
+                                    onSeek = { PlayerController.seekTo(it, persist = true) }
                                 )
                             }
                         }
@@ -382,27 +462,35 @@ fun PlayerScreen(navController: NavController) {
                     ClickWheel(
                         diameter = wheel,
                         isPlaying = isPlaying,
-                        centerActive = progressMode,
+                        centerActive = wheelMode != 0,
+                        // 只在「封面 + 默认模式 + 非队列」的切歌场景启用上报节流，让切歌节奏与
+                        // 音效震动严格对齐（切一首=响一声），且一次 CoverFlow 动画完整播完。
+                        // 音量 / 进度 / 歌词 / 队列逐格场景传 0，保持每格即时响应。
+                        rotateIntervalMs = if (wheelMode == 0 && !showLyrics && !menuOpen) COVER_FLOW_DURATION_MS else 0L,
                         onRotate = { steps ->
                             when {
                                 menuOpen -> moveQueueSelection(steps)
-                                progressMode -> {
-                                    // 进度模式优先：封面 / 歌词界面按了中心键进进度模式后，
-                                    // 滚轮一律调歌曲进度，而不是继续滚歌词（需求2）。
-                                    // 慢转 1 秒/格精确到秒，快滑自动放大步长，全程本地累积不卡顿。
+                                wheelMode == 2 -> {
+                                    // 进度模式：滚轮调歌曲进度，慢转 1 秒/格、快滑自动放大步长，
+                                    // 全程本地累积不卡顿，松手/空闲时一次性提交。
                                     seekByWheel(steps)
                                 }
+                                wheelMode == 1 -> {
+                                    // 音量模式：滚轮即时调音量
+                                    rotateVolume(steps)
+                                }
                                 showLyrics -> {
-                                    // 歌词界面（非进度模式）：滚轮直接滚动歌词
+                                    // 默认模式 + 歌词界面：滚轮滚动歌词（保留原行为）
                                     scope.launch { lyricsScroll.scrollBy(steps * 120f) }
                                 }
                                 else -> {
-                                    val next = MusicBoxApp.instance.volume.value + steps * 0.04f
-                                    volumeActive = true
-                                    scope.launch { MusicBoxApp.instance.setVolume(next) }
+                                    // 默认模式 + 封面界面：滚轮直接切歌
+                                    rotateSwitchSong(steps)
                                 }
                             }
                         },
+                        // 滚轮松手即提交进度：滚到目标位置后手指离开环体，立即 seek
+                        onRotateEnd = { commitWheelRelease() },
                         onPlayPause = { if (isPlaying) PlayerController.pause() else PlayerController.play() },
                         // 长按播放键：进入歌曲详情（metadata + 收藏）
                         onPlayLongPress = { if (current != null) navController.navigate("songdetail") },
@@ -412,8 +500,8 @@ fun PlayerScreen(navController: NavController) {
                         onNext = { if (menuOpen) moveQueueSelection(1) else if (progressMode) seekBy(5_000L) else PlayerController.next() },
                         onRewind = { if (menuOpen) moveQueueSelection(-1) else seekBy(-5_000L) },
                         onForward = { if (menuOpen) moveQueueSelection(1) else seekBy(5_000L) },
-                        onMenu = { menuOpen = !menuOpen; if (!menuOpen) exitProgressMode() },
-                        onMenuHome = { menuOpen = false; exitProgressMode(); navController.popBackStack("library", false) },
+                        onMenu = { menuOpen = !menuOpen; if (menuOpen) leaveWheelMode() },
+                        onMenuHome = { menuOpen = false; leaveWheelMode(); navController.popBackStack("library", false) },
                         onConfirm = {
                             when {
                                 menuOpen -> {
@@ -422,24 +510,14 @@ fun PlayerScreen(navController: NavController) {
                                         menuOpen = false
                                     }
                                 }
-                                // 短按中心键：封面 / 歌词界面统一切换进度模式
-                                else -> {
-                                    if (progressMode) exitProgressMode()
-                                    else {
-                                        // 进入进度模式：以当前播放位置作为本地累积起点，同时记下基准
-                                        lastSeekAt = 0L
-                                        val pos = PlayerController.currentPositionMs()
-                                        wheelSeekMs = pos
-                                        progressStartMs = pos
-                                        progressMode = true
-                                    }
-                                }
+                                // 短按中心键：默认 → 进度 → 音量 → 默认，循环切换
+                                else -> switchWheelMode()
                             }
                         },
-                        // 长按中心键：切换歌词界面（取消原顶栏歌词按钮）
+                        // 长按中心键：切换歌词界面（同时退出调节模式）
                         onCenterLongPress = {
                             showLyrics = !showLyrics
-                            exitProgressMode()
+                            leaveWheelMode()
                         },
                         // 队列界面长按逐行移动时每行震动，与主页列表一致
                         hapticOnLongRepeat = menuOpen
@@ -612,18 +690,9 @@ private fun NowPlayingArt(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Box(
-                Modifier
-                    .size(art)
-                    .shadow(20.dp, RoundedCornerShape(14.dp))
-                    .clip(RoundedCornerShape(14.dp))
-            ) {
-                CoverImage(
-                    track.coverUrl,
-                    Modifier.fillMaxSize(),
-                    embeddedAudioUrl = track.embeddedAudioUrl
-                )
-            }
+            // 上一首/下一首切歌时，封面以 CoverFlow 式 3D 翻转滑入滑出，取代原来的硬切。
+            // 方向由曲目在队列中的索引变化自动推断，覆盖点击 / 自动播完 / 队列选歌所有来源。
+            CoverFlowSwitcher(track = track, art = art)
             Spacer(Modifier.height(18.dp))
             if (track.isHiRes || track.qualityLabel.isNotBlank()) {
                 HiResBadge(track, onDark = true)
@@ -650,6 +719,105 @@ private fun NowPlayingArt(
                 modifier = Modifier.fillMaxWidth()
             )
         }
+    }
+}
+
+/**
+ * 切歌封面动画（CoverFlow 风格）：曲目切换时，旧封面朝一侧做 3D 翻转 + 缩小 + 淡出，
+ * 新封面从另一侧翻转进入，形成唱片架「翻页」感，取代原来生硬的瞬时换图。
+ *
+ * 方向自动推断：记录上一首曲目在队列中的索引，与当前索引比较——
+ * 索引增大视为「下一首」（新封面自右侧进入），减小视为「上一首」（自左侧进入）。
+ * 这样点击上一首/下一首、自动播完、队列选歌、锁屏/蓝牙控制等所有切歌来源都能覆盖。
+ *
+ * 只在 track.id 真正变化时启动动画；首次组合、同一首歌的进度/暂停刷新都不会触发。
+ */
+@Composable
+private fun CoverFlowSwitcher(track: Track, art: Dp) {
+    // 订阅当前索引，仅用于推断切歌方向（新曲目在队列中相对上一首靠前还是靠后）
+    val idx by PlayerController.currentIndex.collectAsState()
+    val density = LocalDensity.current
+    val artPx = with(density) { art.toPx() }
+
+    // 当前稳定展示的曲目 + 正在退出的旧封面（null = 无动画）
+    var shown by remember { mutableStateOf(track) }
+    var outgoing by remember { mutableStateOf<Track?>(null) }
+    // 新增封面进入方向：+1 自右，-1 自左
+    var direction by remember { mutableIntStateOf(1) }
+    val progress = remember { Animatable(0f) }
+
+    // 记住上一次的索引，用于推断方向；首帧不产生动画
+    var lastIdx by remember { mutableIntStateOf(idx) }
+
+    LaunchedEffect(track.id) {
+        if (track.id == shown.id) return@LaunchedEffect
+        // 方向：目标索引 >= 上次索引视为前进。队列选歌可能跨多首，只取方向符号。
+        direction = if (idx >= lastIdx) 1 else -1
+        lastIdx = idx
+        outgoing = shown
+        shown = track
+        progress.snapTo(0f)
+        progress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = COVER_FLOW_DURATION_MS.toInt(), easing = FastOutSlowInEasing)
+        )
+        outgoing = null
+    }
+
+    val p = progress.value
+    Box(Modifier.size(art), contentAlignment = Alignment.Center) {
+        // 旧封面：朝反方向退出（翻转 + 缩小 + 淡出）
+        val old = outgoing
+        if (old != null) {
+            CoverFlowCard(
+                track = old,
+                art = art,
+                modifier = Modifier.graphicsLayer {
+                    translationX = -direction * artPx * 0.85f * p
+                    rotationY = direction * 55f * p
+                    val s = 1f - 0.28f * p
+                    scaleX = s
+                    scaleY = s
+                    alpha = (1f - p).coerceIn(0f, 1f)
+                    cameraDistance = 14f * density.density
+                }
+            )
+        }
+        // 新封面：从进入方向翻转归位（有动画时 0→1，无动画时固定 1 即静止居中）
+        CoverFlowCard(
+            track = shown,
+            art = art,
+            modifier = Modifier.graphicsLayer {
+                if (old == null) {
+                    alpha = 1f
+                } else {
+                    translationX = direction * artPx * 0.85f * (1f - p)
+                    rotationY = -direction * 55f * (1f - p)
+                    val s = 0.72f + 0.28f * p
+                    scaleX = s
+                    scaleY = s
+                    alpha = p.coerceIn(0f, 1f)
+                    cameraDistance = 14f * density.density
+                }
+            }
+        )
+    }
+}
+
+/** CoverFlow 单张封面卡片：圆角 + 投影，变换由外部 modifier 注入。 */
+@Composable
+private fun CoverFlowCard(track: Track, art: Dp, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(art)
+            .shadow(20.dp, RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(14.dp))
+    ) {
+        CoverImage(
+            track.coverUrl,
+            Modifier.fillMaxSize(),
+            embeddedAudioUrl = track.embeddedAudioUrl
+        )
     }
 }
 
@@ -964,9 +1132,24 @@ private fun SeekBar(
     // 进度在此处自行订阅：500ms 的更新只会让这条进度条重组，不再牵动整页。
     val livePosition by PlayerController.position.collectAsState()
     var drag by remember(duration) { mutableStateOf<Float?>(null) }
+    // 乐观预览值：手指滑动松手后先固定显示目标位置，等真实进度追上来再交回实时显示。
+    // 避免「滑到新位置 → 松手瞬间跳回旧位置 → 500ms 后才刷新到新位置」的回跳（需求4）。
+    var optimisticSeek by remember(duration) { mutableStateOf<Long?>(null) }
+    LaunchedEffect(livePosition, optimisticSeek) {
+        val target = optimisticSeek
+        if (target != null && kotlin.math.abs(livePosition - target) <= 700L) {
+            optimisticSeek = null   // 真实进度已追上目标，平滑交回实时显示
+        }
+    }
+    LaunchedEffect(optimisticSeek) {
+        if (optimisticSeek != null) {
+            kotlinx.coroutines.delay(2500L)
+            optimisticSeek = null   // seek 失败/超时兜底，避免永久卡在预览值
+        }
+    }
     val maxRange = duration.coerceAtLeast(1).toFloat()
-    // 优先级：本地拖动 > 滚轮累积值 > 实时播放位置
-    val displayMs = wheelPosition ?: livePosition
+    // 优先级：本地拖动 > 滚轮累积值 > 乐观预览 > 实时播放位置
+    val displayMs = wheelPosition ?: optimisticSeek ?: livePosition
     val shown = drag ?: displayMs.toFloat().coerceIn(0f, maxRange)
     val trackH = if (emphasized) 8.dp else 3.dp
     val thumbS = if (emphasized) 16.dp else 10.dp
@@ -976,7 +1159,10 @@ private fun SeekBar(
             value = shown,
             onValueChange = { drag = it },
             onValueChangeFinished = {
-                drag?.let { onSeek(it.toLong()) }
+                drag?.let { target ->
+                    optimisticSeek = target.toLong()
+                    onSeek(target.toLong())
+                }
                 drag = null
             },
             valueRange = 0f..maxRange,

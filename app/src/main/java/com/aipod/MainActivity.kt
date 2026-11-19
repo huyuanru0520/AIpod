@@ -367,6 +367,16 @@ private fun AppRoot() {
     // 把「屏幕方向」也纳入触发键：旋转设备时强制重新评估沉浸状态，
     // 避免横屏 Cover Flow 全屏「有时触发不了」（方向变化但 fullScreen/onPlayer 未变时也能重跑）。
     val orientation = LocalConfiguration.current.orientation
+    // 冷启动直接进入「正在播放」页：保留 library 作为栈底，启动时一次性压入 player，
+    // 使返回栈为 [library, player]，与「从曲库点进播放页」完全一致——MENU 长按 / 返回
+    // 仍能正常退回曲库。守卫只在首次竖屏时消耗，横屏启动不打断全屏 CoverFlow。
+    var bootToPlayerDone by remember { mutableStateOf(false) }
+    LaunchedEffect(orientation) {
+        if (!bootToPlayerDone && orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+            bootToPlayerDone = true
+            runCatching { navController.navigate("player") { launchSingleTop = true } }
+        }
+    }
     LaunchedEffect(fullScreen, onPlayer, orientation) {
         val activity = context.findActivity() as? MainActivity ?: return@LaunchedEffect
         val window = activity.window

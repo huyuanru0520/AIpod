@@ -72,6 +72,8 @@ fun ClickWheel(
     /** 轮体所在背景是否为暗色：播放页是暗色封面传 true，首页跟随明暗主题。图标/描边据此反色。 */
     dark: Boolean = true,
     onRotate: (Int) -> Unit,
+    /** 滚轮转动结束（手指离开环体）：进度模式据此把本地预览位置一次性提交为真正的 seek。 */
+    onRotateEnd: () -> Unit = {},
     onPlayPause: () -> Unit,
     /** 底部播放键长按：播放页用它进入歌曲详情；不传则沿用播放/暂停。 */
     onPlayLongPress: () -> Unit = {},
@@ -86,6 +88,12 @@ fun ClickWheel(
     onCenterLongPress: () -> Unit = {},
     /** 左右键长按连续动作时是否每次震动（列表逐行移动需要；播放页快进快退保持默认 false）。 */
     hapticOnLongRepeat: Boolean = false,
+    /**
+     * 滚轮上报 / 音效震动的最小间隔（毫秒）。0 = 不节流，每格都上报、音效按 60ms 节流（默认，
+     * 设置页 / 曲库 / 歌词 / 进度 / 音量等逐格场景用）。>0 时上报与音效共用同一节流点，
+     * 做到「上报一次 = 响一声」——播放页封面切歌传 CoverFlow 动画时长，保证切歌节奏与音效严格对齐。
+     */
+    rotateIntervalMs: Long = 0L,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -96,6 +104,7 @@ fun ClickWheel(
     // 第一次组合时的旧回调（其中 node 是 Root），导致进入搜索页后字母盘不跟随滚轮。
     // 下面统一用 xxx.value()，每次重组都能拿到页面最新派发的回调。
     val onRotateRef = rememberUpdatedState(onRotate)
+    val onRotateEndRef = rememberUpdatedState(onRotateEnd)
     val onPlayPauseRef = rememberUpdatedState(onPlayPause)
     val onPlayLongPressRef = rememberUpdatedState(onPlayLongPress)
     val onPreviousRef = rememberUpdatedState(onPrevious)
@@ -107,6 +116,7 @@ fun ClickWheel(
     val onConfirmRef = rememberUpdatedState(onConfirm)
     val onCenterLongPressRef = rememberUpdatedState(onCenterLongPress)
     val hapticOnLongRepeatRef = rememberUpdatedState(hapticOnLongRepeat)
+    val rotateIntervalRef = rememberUpdatedState(rotateIntervalMs)
     var longFired by remember { mutableStateOf(false) }
     var centerDown by remember { mutableStateOf(false) }
     var bottomDown by remember { mutableStateOf(false) }
@@ -165,8 +175,14 @@ fun ClickWheel(
                             lastAngle = angleOf(p, c)
                             accum = 0f
                         },
-                        onDragEnd = { onRing = false },
-                        onDragCancel = { onRing = false }
+                        onDragEnd = {
+                            if (onRing) onRotateEndRef.value()
+                            onRing = false
+                        },
+                        onDragCancel = {
+                            if (onRing) onRotateEndRef.value()
+                            onRing = false
+                        }
                     ) { change, _ ->
                         change.consume()
                         if (!onRing) return@detectDragGestures
@@ -179,15 +195,26 @@ fun ClickWheel(
                         accum += delta
 
                         val now = System.currentTimeMillis()
+                        val reportInterval = rotateIntervalRef.value
                         while (abs(accum) >= STEP_DEGREES) {
                             val forward = accum > 0
                             accum -= if (forward) STEP_DEGREES else -STEP_DEGREES
-                            // 震动/音效做节流，但每一格都必须上报 onRotate
-                            if (now - lastTickAt >= MIN_TICK_INTERVAL_MS) {
-                                lastTickAt = now
-                                Haptics.tick(context, view)
+                            if (reportInterval > 0L) {
+                                // 节流模式（播放页切歌）：上报与音效共用同一节流点，
+                                // 被间隔吞掉的格既不响也不上报 —— 切一首 = 响一声，节奏严格对齐。
+                                if (now - lastTickAt >= reportInterval) {
+                                    lastTickAt = now
+                                    Haptics.tick(context, view)
+                                    onRotateRef.value(if (forward) 1 else -1)
+                                }
+                            } else {
+                                // 非节流模式（默认，逐格场景）：每格都上报，音效仅按 60ms 节流。
+                                if (now - lastTickAt >= MIN_TICK_INTERVAL_MS) {
+                                    lastTickAt = now
+                                    Haptics.tick(context, view)
+                                }
+                                onRotateRef.value(if (forward) 1 else -1)
                             }
-                            onRotateRef.value(if (forward) 1 else -1)
                         }
                     }
                 }
