@@ -278,6 +278,13 @@ class MainActivity : ComponentActivity() {
         setContent { AppRoot() }
         CrashLogger.mark("setContent returned")
     }
+
+    override fun onStop() {
+        // 退到后台 / 熄屏 / 被切走时强制保存播放进度，尽量把丢失窗口压到最小。
+        // 进程被系统直接杀死时 onStop 可能来不及，但播放中的 4 秒节流落盘会兜底。
+        runCatching { PlayerController.persistOnBackground() }
+        super.onStop()
+    }
 }
 
 @Composable

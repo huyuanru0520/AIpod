@@ -6,6 +6,17 @@ import androidx.media3.common.MediaMetadata
 
 enum class SourceType { WEBDAV, FNOS, M3U, LOCAL }
 
+/**
+ * 播放状态快照：冷启动恢复用（队列 + 当前索引 + 播放位置 + 是否正在播放）。
+ * 队列用 Track 的 JSON 落盘，见 MusicBoxApp.encodeTracks/decodeTracks。
+ */
+data class PlaybackSnapshot(
+    val queue: List<Track>,
+    val index: Int,
+    val positionMs: Long,
+    val playing: Boolean
+)
+
 /** Unified track model used across all sources (WebDAV / FnOS / M3U). */
 data class Track(
     val id: String,

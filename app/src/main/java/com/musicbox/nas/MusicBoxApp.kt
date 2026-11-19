@@ -149,6 +149,16 @@ class MusicBoxApp : Application() {
     /** 用户授权的本地音乐文件夹 tree URI（持久化，供「重新扫描」复用，无需再次选文件夹）。 */
     val localFolderUri = MutableStateFlow<String?>(null)
 
+    /**
+     * 会话恢复完成信号：restoreSessions() 结束时置 true。
+     * PlayerController 必须等它为 true 后再恢复播放——否则 WebDAV / 飞牛的鉴权尚未注册，
+     * 恢复的队列地址会全部请求失败。冷启动播放恢复由 PlayerController 订阅此信号触发一次。
+     */
+    val sessionRestored = MutableStateFlow(false)
+
+    /** 冷启动播放恢复是否已完成（避免 attach / 信号变化触发多次恢复）。 */
+    var playbackRestoreDone = false
+
     val webDavScanProgress = MutableStateFlow("")
     val webDavScanning = MutableStateFlow(false)
     /** 一次进程生命周期内最多自动全库扫描一次；失败也不反复重试冲击网盘。 */
@@ -429,6 +439,9 @@ class MusicBoxApp : Application() {
         CoroutineScope(Dispatchers.IO).launch {
             runCatching { restoreSessions() }
                 .onFailure { CrashLogger.error("restore-sessions", it) }
+                // 无论恢复是否成功都放行信号：播放恢复若一直等不到会永远不触发。
+                // 鉴权缺失时恢复的队列可能请求失败，但至少不会卡死，错误会显示在界面上。
+                .also { sessionRestored.value = true }
         }
         CrashLogger.mark("Application.onCreate done")
     }
@@ -832,6 +845,39 @@ class MusicBoxApp : Application() {
         }
     }
 
+    // ---- 播放状态快照：三音源通用，冷启动恢复队列 / 当前歌曲 / 播放位置 ----
+
+    /**
+     * 保存播放快照到 DataStore。写盘在 IO 协程里做，调用方无需切线程。
+     * 队列大（上千首）时 JSON 也才几百 KB，DataStore 增量更新(.edit)足够快。
+     */
+    fun savePlayback(snapshot: com.musicbox.nas.data.PlaybackSnapshot) {
+        appScope.launch {
+            runCatching {
+                dataStore.edit { p ->
+                    p[PLAYBACK_QUEUE] = encodeTracks(snapshot.queue)
+                    p[PLAYBACK_INDEX] = snapshot.index.coerceAtLeast(0)
+                    p[PLAYBACK_POSITION] = snapshot.positionMs.coerceAtLeast(0L)
+                    p[PLAYBACK_PLAYING] = snapshot.playing
+                }
+            }.onFailure { CrashLogger.error("savePlayback", it) }
+        }
+    }
+
+    /** 读取播放快照；无快照或解析失败返回 null（首次启动 / 从未播放过）。 */
+    suspend fun loadPlayback(): com.musicbox.nas.data.PlaybackSnapshot? = runCatching {
+        val p = dataStore.data.first()
+        val rawQueue = p[PLAYBACK_QUEUE] ?: return@runCatching null
+        val queue = decodeTracks(rawQueue)
+        if (queue.isEmpty()) return@runCatching null
+        com.musicbox.nas.data.PlaybackSnapshot(
+            queue = queue,
+            index = (p[PLAYBACK_INDEX] ?: 0).coerceIn(0, queue.lastIndex),
+            positionMs = p[PLAYBACK_POSITION] ?: 0L,
+            playing = p[PLAYBACK_PLAYING] ?: false
+        )
+    }.onFailure { CrashLogger.error("loadPlayback", it) }.getOrNull()
+
     // ---- 设置 JSON 导出 / 导入 ----
 
     /**
@@ -999,3 +1045,9 @@ private val FAV_LOCAL = stringPreferencesKey("favorites_local")
 private val LOCAL_LIBRARY = stringPreferencesKey("local_library")
 /** 用户授权的本地音乐文件夹 tree URI，供「重新扫描」复用。 */
 private val LOCAL_FOLDER = stringPreferencesKey("local_folder_uri")
+/** 播放状态快照：队列 JSON。 */
+private val PLAYBACK_QUEUE = stringPreferencesKey("playback_queue")
+/** 播放状态快照：当前索引 / 位置(ms) / 是否正在播放。 */
+private val PLAYBACK_INDEX = intPreferencesKey("playback_index")
+private val PLAYBACK_POSITION = longPreferencesKey("playback_position")
+private val PLAYBACK_PLAYING = booleanPreferencesKey("playback_playing")
