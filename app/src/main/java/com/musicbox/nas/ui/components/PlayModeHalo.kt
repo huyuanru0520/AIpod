@@ -88,21 +88,29 @@ fun PlayModeHalo(
         val rectsDesc = rects?.mapIndexed { i, r ->
             "[$i]L${r.left},T${r.top},R${r.right},B${r.bottom},W${r.width()},H${r.height()}"
         }?.joinToString(" ") ?: "null"
-        CrashLogger.info(
-            "HaloDiag",
-            "$tag statusTop=$statusTop cutoutNull=${cutout == null} rectCount=${rects?.size ?: 0} rects=$rectsDesc " +
-                "safeInsetT=${cutout?.safeInsetTop} L=${cutout?.safeInsetLeft} R=${cutout?.safeInsetRight} " +
-                "viewW=${view.width} viewH=${view.height} canvasOrigin=(${canvasOrigin.x.toInt()},${canvasOrigin.y.toInt()})"
-        )
         val rect: Rect? = rects?.firstOrNull()
-        if (rect != null && rect.width() > 0 && rect.height() > 0) {
-            cutoutCenter = Offset((rect.left + rect.right) / 2f, (rect.top + rect.bottom) / 2f)
-            // 外接圆半径 = 长边一半
-            cutoutRadius = max(rect.width(), rect.height()) / 2f
+        if (rect != null && rect.width() > 0) {
+            // 居中圆形挖孔：宽度即真实孔径（本机 W=78）。
+            // 高度常被 ROM 撑满整条状态栏（本机 H=134 恰好等于 statusTop），不能当孔径用，
+            // 否则半径取 max(W,H)/2=67，环被放大近一倍、圆心也被拉到状态栏中部而偏下。
+            cutoutRadius = rect.width() / 2f
+            // 水平中心可信；垂直方向 rect.top/bottom 被撑满状态栏，取中点会偏下，
+            // 改为贴矩形顶部 + 半径，让环贴着屏幕顶部（真实挖孔就是贴顶的）。
+            cutoutCenter = Offset(
+                (rect.left + rect.right) / 2f,
+                rect.top + cutoutRadius
+            )
         } else {
             cutoutCenter = null
             cutoutRadius = 0f
         }
+        CrashLogger.info(
+            "HaloDiag",
+            "$tag statusTop=$statusTop cutoutNull=${cutout == null} rectCount=${rects?.size ?: 0} rects=$rectsDesc " +
+                "safeInsetT=${cutout?.safeInsetTop} L=${cutout?.safeInsetLeft} R=${cutout?.safeInsetRight} " +
+                "viewW=${view.width} viewH=${view.height} canvasOrigin=(${canvasOrigin.x.toInt()},${canvasOrigin.y.toInt()}) " +
+                "-> center=(${cutoutCenter?.x?.toInt()},${cutoutCenter?.y?.toInt()}) r=${cutoutRadius.toInt()}"
+        )
     }
     LaunchedEffect(view) { readCutout("init") }
     // 摇一摇触发时再读一次并打印，确保能拿到稳定的 insets
