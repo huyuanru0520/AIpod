@@ -30,8 +30,8 @@ android {
         // Media3 1.9.3 (media3-session) 要求 minSdk >= 23
         minSdk = 23
         targetSdk = 34
-        versionCode = 103
-        versionName = "4.2.1"
+        versionCode = 104
+        versionName = "4.2.2"
     }
 
     signingConfigs {

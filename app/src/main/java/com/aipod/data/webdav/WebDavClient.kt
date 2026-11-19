@@ -7,6 +7,7 @@ import com.aipod.data.HostAuth
 import com.aipod.data.SourceType
 import com.aipod.data.Track
 import com.aipod.data.m3u.M3uParser
+import com.aipod.data.rebasedTo
 import com.aipod.data.normalizeHost
 import com.aipod.util.AUDIO_EXTENSIONS
 import com.aipod.util.CrashLogger
@@ -94,6 +95,19 @@ data class DavLibrary(
     val isEmpty: Boolean get() = tracks.isEmpty() && playlists.isEmpty()
 }
 
+/**
+ * 增量扫描缓存条目：以音频文件的相对路径为 key，记录上次扫描时的指纹与构建好的 Track。
+ * 下次扫描时若 lastModified/size 未变，直接复用 Track，跳过最耗时的元数据下载请求。
+ * 只用于「手动扫描」增量；自动扫描/首次扫描仍全量构建。
+ */
+data class IncrementalEntry(
+    val lastModified: String?,
+    val size: Long,
+    val track: Track,
+    /** 构建该 Track 时所用线路 base（如 http://192.168.1.10:5244），用于复用时改写地址。 */
+    val base: String = ""
+) : java.io.Serializable
+
 /** 一次 PROPFIND 的结果分类：成功 / 触发限流 / 其它失败。 */
 private sealed interface DavReply {
     data class Ok(val entries: List<DavEntry>) : DavReply
@@ -166,11 +180,12 @@ private class ScanThrottle(baseIntervalMs: Long, concurrency: Int) {
         block()
     }
 
-    /** 命中限流：立即降速（间隔翻倍，上限 2 秒）。 */
+    /** 命中限流：立即降速（间隔翻倍，上限 2 秒）。零间隔档命中限流时给个保底退避，避免 0*2 永远为 0。 */
     fun onLimited() {
         limitedHits++
         successStreak = 0
-        intervalMs = (intervalMs * 2).coerceAtMost(MAX_INTERVAL_MS)
+        val next = if (intervalMs <= 0L) 200L else intervalMs * 2
+        intervalMs = next.coerceIn(baseMs, MAX_INTERVAL_MS).coerceAtLeast(200L)
         currentIntervalMs = intervalMs
     }
 
@@ -178,7 +193,8 @@ private class ScanThrottle(baseIntervalMs: Long, concurrency: Int) {
     fun onOk() {
         successStreak++
         if (successStreak >= RECOVER_AFTER && intervalMs > baseMs) {
-            intervalMs = (intervalMs - baseMs / 2).coerceAtLeast(baseMs)
+            val step = if (baseMs <= 0L) 50L else baseMs / 2
+            intervalMs = (intervalMs - step).coerceAtLeast(baseMs)
             currentIntervalMs = intervalMs
             successStreak = 0
         }
@@ -485,7 +501,11 @@ class WebDavClient(private val okHttp: OkHttpClient, private val registry: AuthR
         paceMs: Long = DEFAULT_PACE_MS,
         concurrency: Int = DEFAULT_CONCURRENCY,
         onProgress: (String) -> Unit = {},
-        onBatch: (List<Track>) -> Unit = {}
+        onBatch: (List<Track>) -> Unit = {},
+        /** 增量缓存（相对路径 -> 指纹+Track）；为空则全量构建。仅手动扫描传入。 */
+        incrementalCache: Map<String, IncrementalEntry>? = null,
+        /** 扫描完成后回传本轮的新指纹缓存，供调用方持久化。 */
+        onFingerprints: (Map<String, IncrementalEntry>) -> Unit = {}
     ): DavLibrary = withContext(Dispatchers.IO) {
         registerAuth(conn)
         // 主备线路：先探测主线路，不可达则整轮扫描都走备用线路（地址/封面/播放统一）
@@ -496,6 +516,11 @@ class WebDavClient(private val okHttp: OkHttpClient, private val registry: AuthR
 
         val tracks = mutableListOf<Track>()
         val playlists = mutableListOf<DavPlaylist>()
+        // 增量扫描：本轮新指纹 + 复用计数。缓存为空表示全量扫描。
+        val newFingerprints = HashMap<String, IncrementalEntry>()
+        val useIncremental = incrementalCache != null && incrementalCache.isNotEmpty()
+        var reusedCount = 0
+        var rebuiltCount = 0
         // 工作队列（BFS）：目录出队即扫描；失败（非认证/权限）在限次内重新入队重试，
         // 避免偶发超时 / 服务器抖动导致某个目录及其整棵子树被静默丢弃（旧版「只扫到一部分」的根因）。
         val visited = LinkedHashSet<String>()
@@ -513,7 +538,13 @@ class WebDavClient(private val okHttp: OkHttpClient, private val registry: AuthR
         dirDepth[rootKey] = 0
         parentOf[rootKey] = null
         var failed = 0
-        val throttle = ScanThrottle(paceMs, concurrency)
+        // 局域网自建服务无网盘风控，去掉全局间隔让并发真正跑满；公网仍按用户档位限速。
+        val localNet = isLocalNetwork(conn.baseUrl)
+        val effectivePace = if (localNet) 0L else paceMs
+        val throttle = ScanThrottle(effectivePace, concurrency)
+        if (localNet) {
+            CrashLogger.info("WebDAV", "检测到局域网地址，已关闭全局请求间隔（仅保留 $concurrency 路并发）")
+        }
         var truncatedNote: String? = null
         var authFailures = 0
         var lastEmitted = 0
@@ -615,13 +646,48 @@ class WebDavClient(private val okHttp: OkHttpClient, private val registry: AuthR
                     // 并行解析本目录内的音频 / STRM（每首 1~2 个请求：STRM 读文件 + 目标标签）。
                     // 真实并发度仍由 ScanThrottle（Semaphore + 间隔）统一约束，不会失控；
                     // 这里只是把原本「一首接一首」的串行等待改成并发，歌曲顺序仍按原条目顺序回填。
+                    // 增量：指纹（lastModified+size）未变的直接复用缓存 Track，跳过元数据下载请求。
                     if (audioEntries.isNotEmpty()) {
                         val built = coroutineScope {
                             audioEntries.map { e ->
-                                async { runCatching { buildTrack(conn, e, coverUrl, throttle) }.getOrNull() }
+                                async {
+                                    val key = pathOnly(e.href)
+                                    val cached = if (useIncremental) incrementalCache!![key] else null
+                                    if (cached != null &&
+                                        cached.lastModified == e.lastModified && cached.size == e.size
+                                    ) {
+                                        // 指纹一致：复用缓存元数据，只按当前线路改写绝对地址
+                                        var reused = if (cached.base.isNotBlank() && cached.base != conn.baseUrl)
+                                            cached.track.rebasedTo(cached.base, conn.baseUrl)
+                                        else cached.track
+                                        // 本轮目录有新封面而旧 Track 无封面时补上（封面不入指纹）
+                                        if (coverUrl != null && reused.coverUrl == null) {
+                                            reused = reused.copy(coverUrl = coverUrl)
+                                        }
+                                        Triple<Track?, Boolean, Pair<String, IncrementalEntry>?>(
+                                            reused, true,
+                                            key to IncrementalEntry(e.lastModified, e.size, reused, conn.baseUrl)
+                                        )
+                                    } else {
+                                        val t = runCatching { buildTrack(conn, e, coverUrl, throttle) }.getOrNull()
+                                        if (t != null) {
+                                            Triple<Track?, Boolean, Pair<String, IncrementalEntry>?>(
+                                                t, false,
+                                                key to IncrementalEntry(e.lastModified, e.size, t, conn.baseUrl)
+                                            )
+                                        } else Triple<Track?, Boolean, Pair<String, IncrementalEntry>?>(null, false, null)
+                                    }
+                                }
                             }.awaitAll()
                         }
-                        for (t in built) if (t != null) tracks.add(t)
+                        // 在单协程里统一收集，避免并发写 HashMap
+                        for ((t, reused, fp) in built) {
+                            if (t != null) {
+                                tracks.add(t)
+                                if (reused) reusedCount++ else rebuiltCount++
+                            }
+                            if (fp != null) newFingerprints[fp.first] = fp.second
+                        }
                     }
                     if (playlistEntries.isNotEmpty()) {
                         val builtPls = coroutineScope {
@@ -798,9 +864,18 @@ class WebDavClient(private val okHttp: OkHttpClient, private val registry: AuthR
         val combinedNote = listOfNotNull(
             authNote,
             truncatedNote,
+            if (useIncremental)
+                "增量扫描：复用 $reusedCount 首未变更歌曲，仅重建 $rebuiltCount 首（新增/修改）" else null,
             if (throttle.limitedHits > 0)
                 "扫描期间命中服务器限流 ${throttle.limitedHits} 次，已自动降速并退避重试" else null
         ).joinToString("；").ifBlank { null }
+        if (useIncremental) {
+            CrashLogger.info(
+                "WebDAV",
+                "增量扫描完成：复用 $reusedCount 首 / 重建 $rebuiltCount 首，指纹条目 ${newFingerprints.size} 条"
+            )
+            onFingerprints(newFingerprints)
+        }
         DavLibrary(sorted, albums, artists, playlists, dirInfo.size, failed, combinedNote, throttle.limitedHits)
     }
 
@@ -985,10 +1060,14 @@ class WebDavClient(private val okHttp: OkHttpClient, private val registry: AuthR
         ext: String?,
         throttle: ScanThrottle
     ): TrackMeta {
-        val front = downloadCapped(url, throttle, 1_048_576, tail = false)
+        // 元数据通常在文件头几十 KB 内（FLAC Vorbis Comment / ID3 / MP4 moov 前置），
+        // 256KB 足够覆盖绝大多数情况；只有头里没解析到且是 MP4 容器时才补拉尾部 128KB。
+        // 原来头部拉 1MB、尾部 512KB，每首歌白传近 1MB，千首曲库就是近 1GB 无效流量，
+        // 局域网扫描慢的主要成因之一。
+        val front = downloadCapped(url, throttle, 262_144, tail = false)
         var m = front?.let { parseMeta(it, ext).also { _ -> runCatching { it.delete() } } }
         if ((m == null || m.blank()) && (ext == "m4a" || ext == "mp4" || ext == "aac")) {
-            val back = downloadCapped(url, throttle, 524_288, tail = true)
+            val back = downloadCapped(url, throttle, 131_072, tail = true)
             val m2 = back?.let { parseMeta(it, ext).also { _ -> runCatching { it.delete() } } }
             if (m2 != null && !m2.blank()) m = m2
             else back?.let { runCatching { it.delete() } }
@@ -1269,6 +1348,25 @@ class WebDavClient(private val okHttp: OkHttpClient, private val registry: AuthR
         val h = href.trimEnd('/').substringBefore('?').substringBefore('#')
         val raw = h.substringAfterLast('/').ifBlank { h }
         return decodePath(raw)
+    }
+
+    /**
+     * 判断是否为局域网/本机地址。局域网自建服务（如 openlist / NAS 直连）没有公网网盘的
+     * 429/503 风控，全局请求间隔纯属浪费——扫描时把间隔压到 0，只靠 Semaphore 真并发。
+     */
+    private fun isLocalNetwork(baseUrl: String): Boolean {
+        val host = runCatching {
+            java.net.URI(baseUrl).host?.lowercase()
+        }.getOrNull() ?: return false
+        if (host == "localhost" || host == "127.0.0.1" || host == "::1") return true
+        val parts = host.split('.').mapNotNull { it.toIntOrNull() }
+        return when {
+            parts.size == 4 && parts[0] == 192 && parts[1] == 168 -> true
+            parts.size == 4 && parts[0] == 10 -> true
+            parts.size == 4 && parts[0] == 172 && parts[1] in 16..31 -> true
+            host.endsWith(".local") || host.endsWith(".lan") -> true
+            else -> false
+        }
     }
 
     /** 去掉 scheme://host:port，返回解码后的路径（用于去重与层级推断）。 */

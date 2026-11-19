@@ -20,6 +20,7 @@ import com.aipod.data.fnos.FnosConnection
 import com.aipod.data.Track
 import com.aipod.data.rebasedTo
 import com.aipod.data.webdav.DavLibrary
+import com.aipod.data.webdav.IncrementalEntry
 import com.aipod.data.webdav.WebDavClient
 import com.aipod.data.webdav.WebDavConnection
 import com.aipod.player.PlayerController
@@ -234,11 +235,16 @@ class MusicBoxApp : Application() {
         // 前台服务保活：退到后台/锁屏时扫描继续，通知栏显示进度
         com.aipod.scan.ScanService.start(this)
         try {
-            webDavScanProgress.value = "正在并行递归扫描 WebDAV…"
+            // 手动扫描用增量缓存：未变更歌曲直接复用，跳过元数据下载；自动扫描仍全量。
+            val incremental = if (!automatic) loadIncrementalCache() else null
+            webDavScanProgress.value = if (incremental.isNullOrEmpty())
+                "正在并行递归扫描 WebDAV…" else "正在增量扫描 WebDAV（复用已有索引）…"
             val result = webDavClient.scanLibrary(
                 conn, scanPaceMs.value, scanConcurrency.value,
                 onProgress = { msg -> webDavScanProgress.value = msg },
-                onBatch = { found -> webDavScanFound.value = found }
+                onBatch = { found -> webDavScanFound.value = found },
+                incrementalCache = incremental,
+                onFingerprints = { fps -> saveIncrementalCache(fps) }
             )
             webDavLibrary.value = result
             webDavScanFound.value = emptyList()
@@ -268,6 +274,32 @@ class MusicBoxApp : Application() {
     // ---- WebDAV 索引落盘缓存：冷启动不再重复全库扫描（这是最容易被网盘判定为异常的行为） ----
 
     private fun davCacheFile() = java.io.File(filesDir, "dav_library.cache")
+
+    // ---- 增量扫描指纹缓存：手动扫描时跳过未变更歌曲的元数据下载 ----
+    private fun davIncrementalFile() = java.io.File(filesDir, "dav_incremental.cache")
+
+    @Suppress("UNCHECKED_CAST")
+    private fun loadIncrementalCache(): Map<String, IncrementalEntry>? {
+        val f = davIncrementalFile()
+        if (!f.exists()) return null
+        return runCatching {
+            java.io.ObjectInputStream(f.inputStream()).use {
+                it.readObject() as? HashMap<String, IncrementalEntry>
+            }
+        }.getOrElse {
+            CrashLogger.error("WebDAV.incremental.read", it)
+            runCatching { f.delete() }
+            null
+        }
+    }
+
+    private fun saveIncrementalCache(map: Map<String, IncrementalEntry>) {
+        runCatching {
+            java.io.ObjectOutputStream(davIncrementalFile().outputStream()).use {
+                it.writeObject(HashMap(map))
+            }
+        }.onFailure { CrashLogger.error("WebDAV.incremental.write", it) }
+    }
 
     private suspend fun restoreDavLibraryCache() {
         val f = davCacheFile()
@@ -309,6 +341,7 @@ class MusicBoxApp : Application() {
     private suspend fun clearDavLibraryCache() {
         davCacheBase = null
         runCatching { davCacheFile().delete() }
+        runCatching { davIncrementalFile().delete() } // 增量指纹一并清除，避免陈旧缓存
         runCatching { dataStore.edit { it.remove(W_CACHE_BASE) } }
     }
 
