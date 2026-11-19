@@ -8,9 +8,9 @@ plugins {
 
 // 签名配置：仓库内不携带任何密钥。
 // 需要打正式包时，在项目根目录放 keystore.properties（已被 .gitignore 忽略）：
-//   storeFile=keystore/matrix-music.jks
+//   storeFile=keystore/aipod.jks
 //   storePassword=******
-//   keyAlias=matrix-music
+//   keyAlias=aipod
 //   keyPassword=******
 // 文件不存在时自动回退到 debug 签名，保证 fork 下来可直接构建运行。
 val keystorePropsFile = rootProject.file("keystore.properties")
@@ -21,16 +21,16 @@ val hasReleaseKeystore = keystorePropsFile.exists() &&
     !keystoreProps.getProperty("storeFile").isNullOrBlank()
 
 android {
-    namespace = "com.musicbox.nas"
+    namespace = "com.aipod"
     // Media3 1.5.1 requires compileSdk >= 35
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.musicbox.nas"
+        applicationId = "com.aipod"
         minSdk = 21
         targetSdk = 34
-        versionCode = 89
-        versionName = "3.2.3"
+        versionCode = 90
+        versionName = "4.0.0"
     }
 
     signingConfigs {

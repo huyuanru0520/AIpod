@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="120" alt="Matrix Music" />
+<img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="120" alt="AIpod" />
 
-# Matrix Music
+# AIpod
 
 **面向 NAS 的 Android 音乐播放器** — 直连 WebDAV / 飞牛 FnOS，把私有曲库装进手机。
 
@@ -19,7 +19,7 @@
 
 ## 这是什么
 
-Matrix Music 不建索引库、不依赖服务端插件，直接用 WebDAV 协议扫你的 NAS 目录，把音频文件当成流来播。适合群晖、威联通、飞牛、Alist / OpenList 挂载的网盘，以及用 `.strm` 占位文件组织的媒体库。
+AIpod 不建索引库、不依赖服务端插件，直接用 WebDAV 协议扫你的 NAS 目录，把音频文件当成流来播。适合群晖、威联通、飞牛、Alist / OpenList 挂载的网盘，以及用 `.strm` 占位文件组织的媒体库。
 
 所有数据都在本机：连接信息存 DataStore，曲库缓存落盘，不上传任何服务器。
 
@@ -58,8 +58,8 @@ Matrix Music 不建索引库、不依赖服务端插件，直接用 WebDAV 协�
 ## 构建
 
 ```bash
-git clone https://github.com/<your-name>/MatrixMusic.git
-cd MatrixMusic
+git clone https://github.com/<your-name>/AIpod.git
+cd AIpod
 
 # 指向本机 SDK（或直接用 Android Studio 打开，会自动生成）
 cp local.properties.example local.properties
@@ -82,9 +82,9 @@ cp local.properties.example local.properties
 仓库不含任何密钥。要打可上架的包，在项目根目录建 `keystore.properties`（已加入 `.gitignore`）：
 
 ```properties
-storeFile=keystore/matrix-music.jks
+storeFile=keystore/aipod.jks
 storePassword=******
-keyAlias=matrix-music
+keyAlias=aipod
 keyPassword=******
 ```
 
@@ -103,7 +103,7 @@ Maven 仓库如需镜像，改 `settings.gradle.kts` 里的 `repositories` 即�
 ## 项目结构
 
 ```
-app/src/main/java/com/musicbox/nas/
+app/src/main/java/com/aipod/
 ├── MainActivity.kt            入口、导航栈、沉浸式窗口与状态栏处理
 ├── MusicBoxApp.kt             Application、DataStore 配置、扫描与连接状态
 ├── data/

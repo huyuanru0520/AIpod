@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "NASMusic"
+rootProject.name = "AIpod"
 include(":app")

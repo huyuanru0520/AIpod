@@ -25,10 +25,10 @@ echo "==> 校验版本："
 
 # 关键：先清空旧交付物，再放新的——保证目录里永远只有当前这一版。
 echo "==> 清理旧产物（$OUT_DIR）..."
-find "$OUT_DIR" -maxdepth 1 -type f \( -name 'NASMusic-v*.apk' -o -name 'MatrixMusic-*-source.zip' \) -print -delete
+find "$OUT_DIR" -maxdepth 1 -type f \( -name 'AIpod-v*.apk' -o -name 'AIpod-*-source.zip' \) -print -delete
 
-APK_OUT="$OUT_DIR/NASMusic-v${VER}.apk"
-ZIP_OUT="$OUT_DIR/MatrixMusic-${VER}-source.zip"
+APK_OUT="$OUT_DIR/AIpod-v${VER}.apk"
+ZIP_OUT="$OUT_DIR/AIpod-${VER}-source.zip"
 cp "$APK_SRC" "$APK_OUT"
 # 源码包必须包含本次改动。旧版用 `git archive HEAD`，但本脚本在 git commit 之前运行，
 # 那样打出来的是上一版内容。改为从当前工作树快照打包（内容一定是磁盘上的最新源码）。
@@ -36,10 +36,10 @@ echo "==> 从工作树打包源码（含本次改动）..."
 TMP_TREE=$(mktemp -d)
 trap 'rm -rf "$TMP_TREE"' EXIT
 git ls-files -co --exclude-standard | while IFS= read -r f; do
-  mkdir -p "$TMP_TREE/MatrixMusic/$(dirname "$f")"
-  cp "$f" "$TMP_TREE/MatrixMusic/$f"
+  mkdir -p "$TMP_TREE/AIpod/$(dirname "$f")"
+  cp "$f" "$TMP_TREE/AIpod/$f"
 done
-( cd "$TMP_TREE" && zip -q -r "$ZIP_OUT" MatrixMusic )
+( cd "$TMP_TREE" && zip -q -r "$ZIP_OUT" AIpod )
 
 echo "==> 交付物："
 ls -lh "$APK_OUT" "$ZIP_OUT"

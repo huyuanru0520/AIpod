@@ -4,6 +4,15 @@
 
 <!-- 推到自己的仓库后，把文末 compare 链接里的 your-name 替换成实际 GitHub 用户名；或直接删掉链接定义，改为纯文本标题。 -->
 
+## [4.0.0] - 2026-11-19
+
+### 变更
+- 品牌重命名：应用名、项目名、包名全面从 Matrix Music / NAS Music 改为 **AIpod**（applicationId/namespace `com.aipod`），源码目录改为 `com/aipod`，产物改为 `AIpod-v*.apk` 与 `AIpod-*-source.zip`。
+- 内部字符串同步：日志文件名、Share User-Agent、TAG、设置文案中的旧名称一并替换为 AIpod。
+
+### 修复
+- 播放模式环圆心改回灵动岛标定值（归一化 0.499W, 0.029H），半径沿用已验证正确的 0.027W。
+
 ## [3.2.3] - 2026-11-19
 
 ### 修复
@@ -75,7 +84,7 @@
 ### Fixed
 - **日志页没有具体内容**：运行日志原本只在调试模式开启时才写入内部文件，关闭时「复制 / 另存 / 展开」拿到的都是空内容。现改为日志始终记录到内部文件，调试开关只决定是否额外同步到公共下载目录——日志页现在一定有内容可看、可复制、可另存。
 - **日志页看不到选项**：日志页屏幕区原本单独渲染日志正文，把「复制 / 另存 / 展开 / 清空」选项列表整个挡住，转轮在动却看不到选项。现改为统一列表渲染，所有操作选项可见可选，展开日志内容时把最近日志作为列表项直接展示。
-- **另存日志更省事**：改为一键写到下载目录固定路径（NASMusic_log.txt），不再弹系统文件选择器；兼容 Android 10 以下直接写公共目录。
+- **另存日志更省事**：改为一键写到下载目录固定路径（AIpod_log.txt），不再弹系统文件选择器；兼容 Android 10 以下直接写公共目录。
 - **本地扫描遍历更稳**：始终基于根 treeUri + documentId 构造子目录 URI，避免部分文件管理器对子目录 document URI 二次解析返回空导致递归提前结束；根 documentId 解析失败时明确记日志。
 
 ### Added
@@ -236,7 +245,7 @@ CoverFlow 滑动优化、转轮音效与震动强度可调，图标换成透明�
 - 转轮逻辑完全按 iPod：转动只调音量；短按左 / 右上一首 / 下一首，长按连续快退 / 快进；短按 MENU 返回上一级，长按 MENU 回曲库根；下键播放 / 暂停；中心 Select 确认（打开播放队列）。
 - 移除 2.0.2 自定义的「暂停后转轮调进度」模式和页面上的刻度线；进度用细进度条拖动或长按左右键调整。
 - 转轮改为透明玻璃：半透明面 + 上亮下暗描边 + 投影，中心确认键也是一块更亮的小玻璃。刻度完全靠震动表达，每 24° 一格。
-- 震动改为双通道：系统级 `performHapticFeedback`（忽略全局触摸反馈开关）+ `Vibrator` 指定 `USAGE_MEDIA`，幅度提高到 200/235；首次触发写 `Wheel.haptic` 日志，可从 NASMusic_log.txt 直接确认设备是否走通。
+- 震动改为双通道：系统级 `performHapticFeedback`（忽略全局触摸反馈开关）+ `Vibrator` 指定 `USAGE_MEDIA`，幅度提高到 200/235；首次触发写 `Wheel.haptic` 日志，可从 AIpod_log.txt 直接确认设备是否走通。
 
 ## [2.0.2] - 2025-11-18
 
@@ -296,7 +305,7 @@ CoverFlow 滑动优化、转轮音效与震动强度可调，图标换成透明�
 - 底部播放控制栏加 `navigationBarsPadding()`，导航栏恢复显示后不再压住按钮。
 
 ### Changed
-- 日志首行改为 `调试模式已开启 · Matrix Music v1.2.5 (54)`，一眼可确认设备上装的到底是哪一版。
+- 日志首行改为 `调试模式已开启 · AIpod v1.2.5 (54)`，一眼可确认设备上装的到底是哪一版。
 
 ## [1.2.4] - 2025-11-05
 
@@ -434,29 +443,29 @@ CoverFlow 滑动优化、转轮音效与震动强度可调，图标换成透明�
 - 深色模式顶部状态栏出现白条。
 
 ### Changed
-- 应用名改为 **Matrix Music**。
+- 应用名改为 **AIpod**。
 
 ## [1.0.x] - 2025-10
 
 初始版本：WebDAV / 飞牛 FnOS 音源接入、全库扫描与缓存、Media3 播放与通知栏控制、歌词与封面解析、CoverFlow 浏览。
 
-[1.3.0]: https://github.com/your-name/MatrixMusic/compare/v1.2.5...v1.3.0
-[1.2.5]: https://github.com/your-name/MatrixMusic/compare/v1.2.4...v1.2.5
-[1.2.4]: https://github.com/your-name/MatrixMusic/compare/v1.2.3...v1.2.4
-[1.2.3]: https://github.com/your-name/MatrixMusic/compare/v1.2.2...v1.2.3
-[1.2.2]: https://github.com/your-name/MatrixMusic/compare/v1.2.1...v1.2.2
-[1.2.1]: https://github.com/your-name/MatrixMusic/compare/v1.2.0...v1.2.1
-[1.2.0]: https://github.com/your-name/MatrixMusic/compare/v1.1.2...v1.2.0
-[1.1.2]: https://github.com/your-name/MatrixMusic/compare/v1.1.1...v1.1.2
-[1.1.1]: https://github.com/your-name/MatrixMusic/compare/v1.1.0...v1.1.1
-[1.1.0]: https://github.com/your-name/MatrixMusic/compare/v1.0.44...v1.1.0
-[1.0.44]: https://github.com/your-name/MatrixMusic/compare/v1.0.43...v1.0.44
-[1.0.43]: https://github.com/your-name/MatrixMusic/compare/v1.0.42...v1.0.43
-[1.0.42]: https://github.com/your-name/MatrixMusic/compare/v1.0.41...v1.0.42
-[1.0.41]: https://github.com/your-name/MatrixMusic/compare/v1.0.40...v1.0.41
-[1.0.40]: https://github.com/your-name/MatrixMusic/compare/v1.0.39...v1.0.40
-[1.0.39]: https://github.com/your-name/MatrixMusic/compare/v1.0.38...v1.0.39
-[1.0.38]: https://github.com/your-name/MatrixMusic/compare/v1.0.37...v1.0.38
-[1.0.37]: https://github.com/your-name/MatrixMusic/compare/v1.0.36...v1.0.37
-[1.0.36]: https://github.com/your-name/MatrixMusic/compare/v1.0.35...v1.0.36
-[1.0.35]: https://github.com/your-name/MatrixMusic/compare/v1.0.0...v1.0.35
+[1.3.0]: https://github.com/your-name/AIpod/compare/v1.2.5...v1.3.0
+[1.2.5]: https://github.com/your-name/AIpod/compare/v1.2.4...v1.2.5
+[1.2.4]: https://github.com/your-name/AIpod/compare/v1.2.3...v1.2.4
+[1.2.3]: https://github.com/your-name/AIpod/compare/v1.2.2...v1.2.3
+[1.2.2]: https://github.com/your-name/AIpod/compare/v1.2.1...v1.2.2
+[1.2.1]: https://github.com/your-name/AIpod/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/your-name/AIpod/compare/v1.1.2...v1.2.0
+[1.1.2]: https://github.com/your-name/AIpod/compare/v1.1.1...v1.1.2
+[1.1.1]: https://github.com/your-name/AIpod/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/your-name/AIpod/compare/v1.0.44...v1.1.0
+[1.0.44]: https://github.com/your-name/AIpod/compare/v1.0.43...v1.0.44
+[1.0.43]: https://github.com/your-name/AIpod/compare/v1.0.42...v1.0.43
+[1.0.42]: https://github.com/your-name/AIpod/compare/v1.0.41...v1.0.42
+[1.0.41]: https://github.com/your-name/AIpod/compare/v1.0.40...v1.0.41
+[1.0.40]: https://github.com/your-name/AIpod/compare/v1.0.39...v1.0.40
+[1.0.39]: https://github.com/your-name/AIpod/compare/v1.0.38...v1.0.39
+[1.0.38]: https://github.com/your-name/AIpod/compare/v1.0.37...v1.0.38
+[1.0.37]: https://github.com/your-name/AIpod/compare/v1.0.36...v1.0.37
+[1.0.36]: https://github.com/your-name/AIpod/compare/v1.0.35...v1.0.36
+[1.0.35]: https://github.com/your-name/AIpod/compare/v1.0.0...v1.0.35
