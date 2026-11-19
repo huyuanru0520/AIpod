@@ -19,6 +19,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -31,6 +33,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.musicbox.nas.data.PlayMode
 import com.musicbox.nas.ui.theme.BrandRed
+import com.musicbox.nas.util.CrashLogger
 import kotlinx.coroutines.delay
 import kotlin.math.max
 
@@ -70,40 +73,75 @@ fun PlayModeHalo(
         label = "haloAlpha"
     )
 
-    // 读取摄像头（挖孔）精确外径；读不到则留空由绘制时兜底
+    // Canvas 在窗口坐标系中的原点：DisplayCutout 的坐标是相对整个窗口的，
+    // 而 Canvas 内部绘制坐标相对自身，绘制时必须减去这个原点才能对上摄像头。
+    var canvasOrigin by remember { mutableStateOf(Offset.Zero) }
+
+    // 摄像头（挖孔）信息：中心 + 外接圆半径。首次组合 + 每次窗口 insets 变化时重读并打印诊断。
     var cutoutCenter by remember { mutableStateOf<Offset?>(null) }
     var cutoutRadius by remember { mutableStateOf(0f) }
-    LaunchedEffect(view) {
+    fun readCutout(tag: String) {
         val insets = ViewCompat.getRootWindowInsets(view)
-        val rect: Rect? = insets?.displayCutout?.boundingRects?.firstOrNull()
-        if (rect != null && rect.width() > 0) {
+        val cutout = insets?.displayCutout
+        val rects = cutout?.boundingRects
+        val statusTop = insets?.getInsets(WindowInsetsCompat.Type.statusBars())?.top ?: -1
+        val rectsDesc = rects?.mapIndexed { i, r ->
+            "[$i]L${r.left},T${r.top},R${r.right},B${r.bottom},W${r.width()},H${r.height()}"
+        }?.joinToString(" ") ?: "null"
+        CrashLogger.info(
+            "HaloDiag",
+            "$tag statusTop=$statusTop cutoutNull=${cutout == null} rectCount=${rects?.size ?: 0} rects=$rectsDesc " +
+                "safeInsetT=${cutout?.safeInsetTop} L=${cutout?.safeInsetLeft} R=${cutout?.safeInsetRight} " +
+                "viewW=${view.width} viewH=${view.height} canvasOrigin=(${canvasOrigin.x.toInt()},${canvasOrigin.y.toInt()})"
+        )
+        val rect: Rect? = rects?.firstOrNull()
+        if (rect != null && rect.width() > 0 && rect.height() > 0) {
             cutoutCenter = Offset((rect.left + rect.right) / 2f, (rect.top + rect.bottom) / 2f)
-            // 外接圆半径 = 长边一半，圆环紧贴外圈
+            // 外接圆半径 = 长边一半
             cutoutRadius = max(rect.width(), rect.height()) / 2f
+        } else {
+            cutoutCenter = null
+            cutoutRadius = 0f
         }
     }
-
-    val statusTopPx = remember {
-        (ViewCompat.getRootWindowInsets(view)
-            ?.getInsets(WindowInsetsCompat.Type.statusBars())?.top ?: 0).toFloat()
+    LaunchedEffect(view) { readCutout("init") }
+    // 摇一摇触发时再读一次并打印，确保能拿到稳定的 insets
+    LaunchedEffect(trigger) {
+        if (trigger > 0L) readCutout("shake#$trigger")
     }
 
     // 完全隐藏时不绘制，避免一个全屏透明 Canvas 常驻
     if (alpha <= 0.001f) return
 
-    Canvas(modifier.graphicsLayer { this.alpha = alpha }) {
-        val cx = cutoutCenter?.x ?: (size.width / 2f)
-        val cy = cutoutCenter?.y ?: max(statusTopPx / 2f, 26.dp.toPx())
+    Canvas(
+        modifier
+            .graphicsLayer { this.alpha = alpha }
+            .onGloballyPositioned { canvasOrigin = it.positionInWindow() }
+    ) {
+        val c = cutoutCenter
+        val cx: Float
+        val cy: Float
+        if (c != null) {
+            // cutout 坐标相对窗口 → 减去 Canvas 窗口原点，得到 Canvas 内坐标
+            cx = c.x - canvasOrigin.x
+            cy = c.y - canvasOrigin.y
+        } else {
+            // 兜底：屏幕水平中央、状态栏中部
+            val statusTopPx = (ViewCompat.getRootWindowInsets(view)
+                ?.getInsets(WindowInsetsCompat.Type.statusBars())?.top ?: 0).toFloat()
+            cx = size.width / 2f
+            cy = max(statusTopPx / 2f, 26.dp.toPx())
+        }
         // 紧贴摄像头外径：读取到挖孔则用其半径，否则给一个略小的兜底半径
         val r = if (cutoutRadius > 0f) cutoutRadius else 14.dp.toPx()
-        val c = Offset(cx, cy)
+        val center = Offset(cx, cy)
         val stroke = 2.6.dp.toPx()
 
         // 一圈完整细红环，紧贴摄像头外圈
         drawCircle(
             color = BrandRed,
             radius = r + stroke / 2f,
-            center = c,
+            center = center,
             style = Stroke(width = stroke)
         )
         // 模式符号放在环下方，避开摄像头开孔
