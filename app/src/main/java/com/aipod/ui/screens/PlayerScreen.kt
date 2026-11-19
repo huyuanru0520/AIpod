@@ -207,7 +207,8 @@ fun PlayerScreen(navController: NavController) {
         // 播放页保留状态栏（见 MainActivity.keepStatusBarVisible）：内容从状态栏下方开始，
         // 但背景仍在 Box 里铺满整屏，状态栏透出的是封面模糊图而不是黑条。
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {
-            val wheel = minOf(maxWidth * 0.64f, maxHeight * 0.40f, 286.dp)
+            // 滚轮尺寸与设置页 / 列表页统一为 264dp（不再随屏自适应），三处交互手感一致
+            val wheel = 264.dp
             var showLyrics by remember { mutableStateOf(false) }
             // 歌词滚动由外部驱动：滚轮在歌词界面直接滚动歌词（见 onRotate）。
             val lyricsScroll = rememberScrollState()
@@ -287,22 +288,22 @@ fun PlayerScreen(navController: NavController) {
                         Text("队列为空\n转动滚轮选择 · MENU 键返回", color = Color.White.copy(alpha = 0.7f),
                             textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium)
                     }
-                    ClickWheel(
-                        diameter = wheel,
-                        isPlaying = false,
-                        centerActive = false,
-                        onRotate = { },
-                        onPlayPause = { },
-                        onPrevious = { },
-                        onNext = { },
-                        onRewind = { },
-                        onForward = { },
-                        onMenu = { },
-                        onMenuHome = { navController.popBackStack("library", false) },
-                        onConfirm = { },
-                        modifier = Modifier.align(Alignment.CenterHorizontally).offset(y = (-18).dp)
-                    )
-                    Spacer(Modifier.height(24.dp))
+                    Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 64.dp), Alignment.Center) {
+                        ClickWheel(
+                            diameter = wheel,
+                            isPlaying = false,
+                            centerActive = false,
+                            onRotate = { },
+                            onPlayPause = { },
+                            onPrevious = { },
+                            onNext = { },
+                            onRewind = { },
+                            onForward = { },
+                            onMenu = { },
+                            onMenuHome = { navController.popBackStack("library", false) },
+                            onConfirm = { }
+                        )
+                    }
                 } else {
                     val c = current
                     // 中间区域：显示封面 / 歌词 / 队列；菜单打开时底部留白，避免与滚轮重叠
@@ -364,6 +365,8 @@ fun PlayerScreen(navController: NavController) {
                     }
                     Spacer(Modifier.height(2.dp))
 
+                    // 滚轮容器与设置页 / 列表页一致：底部 64dp + navigationBarsPadding
+                    Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 64.dp), Alignment.Center) {
                     ClickWheel(
                         diameter = wheel,
                         isPlaying = isPlaying,
@@ -425,13 +428,9 @@ fun PlayerScreen(navController: NavController) {
                             exitProgressMode()
                         },
                         // 队列界面长按逐行移动时每行震动，与主页列表一致
-                        hapticOnLongRepeat = menuOpen,
-                        // 略微上移，避免整块压在屏幕底部
-                        modifier = Modifier
-                            .align(Alignment.CenterHorizontally)
-                            .offset(y = (-18).dp)
+                        hapticOnLongRepeat = menuOpen
                     )
-                    Spacer(Modifier.height(24.dp))
+                    }
                 }
             }
         }
@@ -576,8 +575,6 @@ private fun WheelProgressHud(durationMs: Long) {
             Text("0:00", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f))
             Text(formatDuration(durationMs), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f))
         }
-        Spacer(Modifier.height(6.dp))
-        Text("滚轮快进快退 · 再按一次中心键退出", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.45f))
     }
 }
 
@@ -637,12 +634,6 @@ private fun NowPlayingArt(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "长按中心键查看歌词",
-                fontSize = 10.sp,
-                color = Color.White.copy(alpha = 0.35f)
             )
         }
     }

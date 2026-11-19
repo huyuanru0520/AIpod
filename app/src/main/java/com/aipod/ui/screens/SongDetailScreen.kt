@@ -2,6 +2,7 @@ package com.aipod.ui.screens
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -11,13 +12,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
@@ -35,20 +36,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.aipod.MusicBoxApp
 import com.aipod.data.Track
 import com.aipod.player.PlayerController
 import com.aipod.ui.components.ClickWheel
-import com.aipod.ui.components.CoverImage
 import com.aipod.ui.components.fadeEdges
+import com.aipod.ui.components.rememberCoverBitmap
 import com.aipod.ui.theme.BrandRed
 import kotlinx.coroutines.launch
 
@@ -56,8 +58,9 @@ private data class MetaRow(val label: String, val value: String)
 
 /**
  * 歌曲详细信息页：iPod 转轮驱动的 metadata 列表。
- * 第一栏是星标收藏圆按钮（按当前音源写入对应收藏表），其余为只读元数据。
- * 转轮上下滚动、中心键在首栏切换收藏、MENU 返回播放页。
+ * 第一行是收藏（行末星号，与文字同高），其余为只读元数据。
+ * 背景与首页 / 播放页一致：取当前封面做真高斯模糊铺满 + 暗化蒙层。
+ * 转轮上下滚动、中心键在首行切换收藏、MENU 返回播放页。
  */
 @Composable
 fun SongDetailScreen(navController: NavController) {
@@ -75,7 +78,7 @@ fun SongDetailScreen(navController: NavController) {
     LaunchedEffect(track?.id) { selected = 0; favorite = track?.let { app.isFavorite(it) } ?: false }
 
     val rows = remember(track) { buildMetaRows(track) }
-    // 首行=收藏按钮，之后是 metadata。收藏行也算一个可滚动项。
+    // 首行=收藏，之后是 metadata。收藏行也算一个可滚动项。
     val itemCount = rows.size + 1
 
     fun toggleFav() {
@@ -84,7 +87,9 @@ fun SongDetailScreen(navController: NavController) {
         scope.launch { app.toggleFavorite(t) }
     }
 
-    Box(Modifier.fillMaxSize().background(Color(0xFF121215))) {
+    Box(Modifier.fillMaxSize()) {
+        // 与首页 / 播放页一致的模糊封面背景
+        SongDetailBackdrop(track)
         Column(Modifier.fillMaxSize()) {
             // 顶部标题
             Column(
@@ -105,7 +110,7 @@ fun SongDetailScreen(navController: NavController) {
                 )
             }
 
-            // metadata 列表（首行收藏圆按钮）
+            // metadata 列表（首行收藏，星号在行末、与文字同高）
             if (track == null) {
                 Box(Modifier.weight(1f).fillMaxWidth(), Alignment.Center) {
                     Text("队列为空", color = Color.White.copy(alpha = 0.6f))
@@ -116,13 +121,33 @@ fun SongDetailScreen(navController: NavController) {
                     modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp).fadeEdges(),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    // 首行：收藏（与 metadata 行同款，value 位置放星号）
                     item {
-                        FavoriteButton(
-                            favorite = favorite,
-                            selected = selected == 0,
-                            onClick = { selected = 0; toggleFav() }
-                        )
-                        Spacer(Modifier.height(14.dp))
+                        val sel = selected == 0
+                        val a by animateFloatAsState(if (sel) 1f else 0.72f, tween(150), label = "favRow")
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (sel) Color.White.copy(alpha = 0.10f) else Color.Transparent)
+                                .clickable { selected = 0; toggleFav() }
+                                .padding(horizontal = 14.dp, vertical = 9.dp)
+                                .alpha(a),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("收藏", color = Color.White.copy(alpha = 0.55f),
+                                style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(80.dp))
+                            Box(Modifier.weight(1f), Alignment.CenterEnd) {
+                                Icon(
+                                    Icons.Default.Star,
+                                    contentDescription = if (favorite) "取消收藏" else "收藏",
+                                    tint = if (favorite) BrandRed else Color.White.copy(alpha = 0.8f),
+                                    // 与行内文字同高（bodyMedium 约 16sp → 20dp），放行末即可
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
                     }
                     itemsIndexed(rows) { i, row ->
                         val sel = selected == i + 1
@@ -146,12 +171,13 @@ fun SongDetailScreen(navController: NavController) {
                 }
             }
 
-            // 转轮：唯一交互
-            Box(Modifier.fillMaxWidth().padding(bottom = 40.dp), Alignment.Center) {
+            // 转轮：唯一交互（与首页 / 设置页统一 264dp、底部 64dp）
+            Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 64.dp), Alignment.Center) {
                 ClickWheel(
-                    diameter = 240.dp,
+                    diameter = 264.dp,
                     isPlaying = isPlaying,
                     centerActive = selected == 0 && favorite,
+                    dark = true,
                     onRotate = { steps ->
                         selected = (selected + steps).coerceIn(0, itemCount - 1)
                         scope.launch { runCatching { listState.animateScrollToItem(selected) } }
@@ -163,39 +189,32 @@ fun SongDetailScreen(navController: NavController) {
                     onForward = { PlayerController.seekTo(PlayerController.currentPositionMs() + 5_000L) },
                     onMenu = { navController.popBackStack() },
                     onMenuHome = { navController.popBackStack("library", false) },
-                    onConfirm = { if (selected == 0) toggleFav() },
-                    modifier = Modifier
+                    onConfirm = { if (selected == 0) toggleFav() }
                 )
             }
         }
     }
 }
 
+/**
+ * 歌曲详情背景：与首页 WheelBackdrop 同款——当前封面真高斯模糊铺满 + 暗化蒙层，
+ * 走 rememberCoverBitmap 的 LRU 缓存，切歌自动刷新。
+ */
 @Composable
-private fun FavoriteButton(favorite: Boolean, selected: Boolean, onClick: () -> Unit) {
-    val scale by animateFloatAsState(if (selected) 1.06f else 1f, tween(150), label = "favScale")
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            Modifier
-                .size(84.dp)
-                .scale(scale)
-                .clip(CircleShape)
-                .background(if (favorite) BrandRed else Color.White.copy(alpha = 0.12f))
-                .clickable { onClick() },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                Icons.Default.Star,
-                contentDescription = if (favorite) "取消收藏" else "收藏",
-                tint = if (favorite) Color.White else Color.White.copy(alpha = 0.8f),
-                modifier = Modifier.size(38.dp)
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            if (favorite) "已收藏 · 中心键取消" else "收藏这首歌 · 中心键收藏",
-            color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall
+private fun SongDetailBackdrop(track: Track?) {
+    Box(Modifier.fillMaxSize().background(Color(0xFF151517)))
+    val bmp = rememberCoverBitmap(track?.coverUrl, track?.embeddedAudioUrl)
+    if (bmp != null) {
+        Image(
+            bitmap = bmp,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { scaleX = 1.15f; scaleY = 1.15f }
+                .blur(32.dp)
         )
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.46f)))
     }
 }
 
