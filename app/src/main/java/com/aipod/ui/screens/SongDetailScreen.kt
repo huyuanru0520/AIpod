@@ -172,7 +172,7 @@ fun SongDetailScreen(navController: NavController) {
             }
 
             // 转轮：唯一交互（与首页 / 设置页统一 264dp、底部 64dp）
-            Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 64.dp), Alignment.Center) {
+            Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 28.dp), Alignment.Center) {
                 ClickWheel(
                     diameter = 264.dp,
                     isPlaying = isPlaying,

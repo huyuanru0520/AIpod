@@ -464,8 +464,8 @@ fun WheelSettingsScreen(navController: NavController) {
                 }
             }
 
-            // 转轮：与首页同步——上移到显示区与屏幕底部之间（bottom 64dp）
-            Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 64.dp), contentAlignment = Alignment.Center) {
+            // 转轮：与首页同步——下调到底部 28dp，列表多显示一行
+            Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 28.dp), contentAlignment = Alignment.Center) {
                 ClickWheel(
                     diameter = 264.dp,
                     isPlaying = isPlaying,

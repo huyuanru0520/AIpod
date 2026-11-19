@@ -288,7 +288,7 @@ fun PlayerScreen(navController: NavController) {
                         Text("队列为空\n转动滚轮选择 · MENU 键返回", color = Color.White.copy(alpha = 0.7f),
                             textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium)
                     }
-                    Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 64.dp), Alignment.Center) {
+                    Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 28.dp), Alignment.Center) {
                         ClickWheel(
                             diameter = wheel,
                             isPlaying = false,
@@ -366,7 +366,7 @@ fun PlayerScreen(navController: NavController) {
                     Spacer(Modifier.height(2.dp))
 
                     // 滚轮容器与设置页 / 列表页一致：底部 64dp + navigationBarsPadding
-                    Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 64.dp), Alignment.Center) {
+                    Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 28.dp), Alignment.Center) {
                     ClickWheel(
                         diameter = wheel,
                         isPlaying = isPlaying,

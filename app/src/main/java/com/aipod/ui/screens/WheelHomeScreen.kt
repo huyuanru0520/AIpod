@@ -89,6 +89,50 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
+ * 滚轮首页的进程内缓存。
+ * - 列表项缓存：进入过的层级（歌曲/收藏/专辑详情…）结果按 key 留存，返回或重复进入时
+ *   立即显示，不再每次转圈等待网络分页（飞牛全量拉取尤其慢）。
+ * - 选中位置缓存：每个层级记住上次停在哪一行，长按 MENU 回主界面再进来仍停在原处。
+ * 进程重启自然清空，属于可重建的纯 UI 状态。
+ */
+private object WheelMemory {
+    private val items = HashMap<String, List<WheelItem>>()
+    private val selections = HashMap<String, Int>()
+
+    fun key(memoryKey: String, node: WheelNode): String = "$memoryKey|${nodeKey(node)}"
+
+    fun items(key: String): List<WheelItem>? = items[key]
+    fun saveItems(key: String, list: List<WheelItem>) { items[key] = list }
+
+    fun selection(key: String): Int = selections[key] ?: 0
+    fun saveSelection(key: String, index: Int) { selections[key] = index }
+
+    /** 列表内容变化（重新扫描/切歌收藏）后让相关缓存失效，避免长期显示旧数据。 */
+    fun invalidateItems(memoryKey: String? = null) {
+        if (memoryKey == null) items.clear()
+        else items.keys.removeIf { it.startsWith("$memoryKey|") }
+    }
+}
+
+/** 层级稳定 key：单例用类名，带参数的用参数值，保证同一层级跨进出 key 一致。 */
+private fun nodeKey(node: WheelNode): String = when (node) {
+    WheelNode.Root -> "root"
+    WheelNode.Songs -> "songs"
+    WheelNode.Albums -> "albums"
+    WheelNode.Artists -> "artists"
+    WheelNode.Playlists -> "playlists"
+    WheelNode.Folders -> "folders"
+    WheelNode.Genres -> "genres"
+    WheelNode.Favorites -> "favorites"
+    WheelNode.Search -> "search"
+    is WheelNode.Folder -> "folder:${node.path}"
+    is WheelNode.AlbumDetail -> "album:${node.entry.id}"
+    is WheelNode.ArtistAlbums -> "artist:${node.entry.id}"
+    is WheelNode.PlaylistDetail -> "playlist:${node.entry.id}"
+    is WheelNode.GenreDetail -> "genre:${node.entry.id}"
+}
+
+/**
  * 滚轮首页：iPod classic 式「转轮选歌」主界面，替换原来的 TabRow + Pager 首页。
  *
  * - 竖屏：层级列表（主菜单 → 分类 → 子项 → 歌曲），转轮上下选择，中心键进入 / 播放，
@@ -117,12 +161,12 @@ internal fun WheelHome(
 
     // 浏览栈：每一层是一个 WheelNode，中心键 push，MENU pop。
     var stack by remember(data) { mutableStateOf<List<WheelNode>>(listOf(WheelNode.Root)) }
-    // 当前层选中项（切层时重置）
+    // 当前层选中项：切层时从 WheelMemory 恢复上次位置（长按 MENU 回主界面再进入仍停原处）
     var selected by remember(data) { mutableStateOf(0) }
     // 横屏：CoverFlow 点开的专辑详情节点；null=封面流。横竖屏各用一套浏览状态，互不干扰。
     var landscapeDetail by remember(data) { mutableStateOf<WheelNode?>(null) }
 
-    // 页面数据由 Worker 异步加载，按「层类型 + 参数」缓存，避免重组重复请求网络。
+    // 页面数据由 Worker 异步加载；命中 WheelMemory 缓存时先用缓存立即显示，不再转圈。
     val scope = rememberCoroutineScope()
     var items by remember(data) { mutableStateOf<List<WheelItem>>(emptyList()) }
     var loading by remember(data) { mutableStateOf(true) }
@@ -138,15 +182,26 @@ internal fun WheelHome(
     // 竖屏：Root 主菜单直接映射为「专辑」层由滚轮驱动（保持既有行为）。
     val effectiveNode: WheelNode = if (isLandscape) (landscapeDetail ?: WheelNode.Albums) else node
 
+    val cacheKey = WheelMemory.key(memoryKey, effectiveNode)
+    val isSearch = effectiveNode is WheelNode.Search && searchQuery.isNotBlank()
+
     LaunchedEffect(effectiveNode, data, searchQuery) {
-        loading = true
         loadError = null
-        selected = 0
+        // 命中缓存：立即显示列表与上次选中位置，不转圈；随后在后台静默刷新数据。
+        // 搜索结果按关键词实时查询，不进缓存。
+        val cached = if (!isSearch) WheelMemory.items(cacheKey) else null
+        if (cached != null) {
+            items = cached
+            selected = WheelMemory.selection(cacheKey).coerceIn(0, cached.lastIndex.coerceAtLeast(0))
+            loading = false
+        } else {
+            loading = true
+            if (!isSearch) selected = WheelMemory.selection(cacheKey).coerceAtLeast(0)
+        }
         val result = try {
             Result.success(
-                if (effectiveNode is WheelNode.Search && searchQuery.isNotBlank()) {
-                    data.search(searchQuery).let { list -> list.mapIndexed { i, t -> t.toWheel(i, list) } }
-                } else loadNode(effectiveNode, data)
+                if (isSearch) data.search(searchQuery).let { list -> list.mapIndexed { i, t -> t.toWheel(i, list) } }
+                else loadNode(effectiveNode, data)
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             // 页面切走 / 重组导致协程取消（拉全量分页时更容易被取消）：正常流程，
@@ -155,11 +210,24 @@ internal fun WheelHome(
         } catch (t: Throwable) {
             Result.failure(t)
         }
-        result.onSuccess { items = it }.onFailure {
-            items = emptyList()
-            loadError = CrashLogger.describe("加载失败", it)
+        result.onSuccess { list ->
+            if (!isSearch) WheelMemory.saveItems(cacheKey, list)
+            items = list
+            // 列表变化后收敛选中位置；命中缓存时已恢复过，这里只防止越界。
+            selected = selected.coerceIn(0, list.lastIndex.coerceAtLeast(0))
+            if (!isSearch) WheelMemory.saveSelection(cacheKey, selected)
+        }.onFailure {
+            // 有缓存时保留缓存继续可用，仅无缓存时展示错误。
+            if (items.isEmpty()) {
+                loadError = CrashLogger.describe("加载失败", it)
+            }
         }
         loading = false
+    }
+
+    // 用户滚轮/点击改变选中行时，记住该层级位置（长按 MENU 回主界面再进入可恢复）。
+    LaunchedEffect(selected, cacheKey) {
+        if (!isSearch) WheelMemory.saveSelection(cacheKey, selected)
     }
 
     fun push(next: WheelNode) {
@@ -388,7 +456,11 @@ internal fun WheelHome(
                         Text(loadError ?: "加载失败", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall)
                     }
                     items.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                        Text(effectiveNode.hint, color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (scanning) "正在扫描音乐库，找到的歌曲会自动出现…" else effectiveNode.hint,
+                            color = Color.White.copy(alpha = 0.8f),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
                     }
                     else -> {
                         WheelList(
@@ -435,7 +507,7 @@ internal fun WheelHome(
                 Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(bottom = 64.dp),
+                    .padding(bottom = 28.dp),
                 contentAlignment = Alignment.Center
             ) {
                 ClickWheel(

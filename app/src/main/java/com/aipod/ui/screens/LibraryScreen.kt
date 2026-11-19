@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -1630,7 +1631,7 @@ private fun LocalEmptyHint(navController: NavController) {
                 )
             }
         }
-        Box(Modifier.fillMaxWidth().padding(bottom = 40.dp), Alignment.Center) {
+        Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 28.dp), Alignment.Center) {
             ClickWheel(
                 diameter = 240.dp,
                 isPlaying = isPlaying,
@@ -1655,8 +1656,7 @@ private fun WebDavSection(navController: NavController) {
     val library by app.webDavLibrary.collectAsState()
     val progress by app.webDavScanProgress.collectAsState()
     val scanning by app.webDavScanning.collectAsState()
-    val found by app.webDavScanFound.collectAsState()
-    var scanError by remember { mutableStateOf<String?>(null) }
+    val lib = library
 
     val c = conn
     if (c == null) {
@@ -1676,121 +1676,26 @@ private fun WebDavSection(navController: NavController) {
             app.startWebDavScan(c, automatic = true)
         }
     }
-    val refresh: () -> Unit = {
-        scanError = null
-        app.startWebDavScan(c)
-    }
-    val lib = library
-    // 扫描在 App 级作用域后台进行：只要有缓存曲库，就始终展示可正常操作的滚轮主界面，
-    // 仅在列表底部叠加一条细进度条提示「后台扫描中」，不再整屏切换到扫描视图挡住操作。
-    // 只有首次连接、尚无任何缓存数据时，才用 ScanLiveView 给出空态 / 实时列表 / 错误入口。
-    if (lib == null) {
-        ScanLiveView(
-            progress = progress,
-            scanning = scanning,
-            found = found,
-            error = scanError,
-            onRefresh = refresh,
-            onGoSettings = { navController.navigate("settings") }
-        )
-    } else {
-        val data = remember(c, lib) { buildDavData(lib) }
-        WheelHome(
-            data = data,
-            navController = navController,
-            memoryKey = "webdav",
-            statusLine = data.status,
-            scanning = scanning,
-            scanProgress = progress
-        )
-    }
-}
-
-/**
- * 扫描态 / 空态统一视图：实时展示扫描过程中「已经找到的音乐」。
- * - 扫描中：顶部进度 + 实时滚动的歌曲列表（边扫边显示，点击任意一首可立即播放）
- * - 扫描结束但没数据：给出空态与「前往设置连接」引导
- * - 出错：展示错误并允许「重新扫描」
- */
-@Composable
-private fun ScanLiveView(
-    progress: String,
-    scanning: Boolean,
-    found: List<Track>,
-    error: String?,
-    onRefresh: () -> Unit,
-    onGoSettings: () -> Unit
-) {
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (scanning) CircularProgressIndicator(Modifier.size(16.dp))
-            Spacer(Modifier.width(8.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    if (scanning) "正在并行扫描 WebDAV 音乐库…" else "扫描未找到音乐",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                if (progress.isNotBlank()) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        progress,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2
-                    )
-                }
-            }
-        }
-        if (error != null) {
-            InlineError(error)
-        }
-        if (found.isNotEmpty()) {
-            Text(
-                "已找到 ${found.size} 首音乐（实时更新 · 点击任意一首可立即播放）",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
-            )
-            LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = true)) {
-                itemsIndexed(found, key = { i, t -> "live-${t.id}#$i" }) { i, t ->
-                    TrackRow(t, onClick = { PlayerController.playTracks(found, i) })
-                    HorizontalDivider()
-                }
-            }
-        } else if (!scanning && error == null) {
-            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
-                    Text("尚未扫描到音乐文件", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "连接信息在「设置 → 连接管理」中填写与修改",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    TextButton(onClick = onGoSettings) { Text("前往设置连接") }
-                }
-            }
-        } else {
-            // 扫描已开始，但还没找到任何文件
-            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                Text(
-                    "正在递归遍历目录、识别音频文件…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        if (!scanning) {
-            Button(
-                onClick = onRefresh,
-                modifier = Modifier.fillMaxWidth().padding(12.dp)
-            ) { Text("重新扫描") }
-        }
-    }
+    // 始终展示可操作的滚轮主界面，扫描只在列表底部叠加一条细进度条，绝不整屏切换遮挡操作。
+    // 首次连接尚无缓存（lib==null）时，用空曲库构造 data，列表显示「扫描中」提示；扫描完成
+    // lib 出现后自动切到真实曲库。error 也只走列表内提示，不再有独立全屏扫描视图。
+    val effectiveLib = lib ?: com.aipod.data.webdav.DavLibrary(
+        tracks = emptyList(),
+        albums = emptyList(),
+        artists = emptyList(),
+        playlists = emptyList(),
+        scannedDirs = 0,
+        failedDirs = 0
+    )
+    val data = remember(c, effectiveLib) { buildDavData(effectiveLib) }
+    WheelHome(
+        data = data,
+        navController = navController,
+        memoryKey = "webdav",
+        statusLine = if (lib == null && scanning) "首次连接 · 后台扫描中" else data.status,
+        scanning = scanning,
+        scanProgress = progress
+    )
 }
 
 @Composable
