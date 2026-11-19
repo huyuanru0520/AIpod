@@ -126,19 +126,21 @@ fun ClickWheel(
         Canvas(Modifier.fillMaxSize()) {
             val r = minOf(size.width, size.height) / 2f
             val c = center
-            val shadowA = if (dark) 0.42f else 0.20f
+            // 浅色磨砂背景上，过重且向下偏移的投影会显出一圈明显深灰月牙。
+            // 降低强度、收紧半径、去掉下偏移，让阴影均匀贴边、若有若无。
+            val shadowA = if (dark) 0.20f else 0.14f
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
                         Color.Black.copy(alpha = shadowA),
-                        Color.Black.copy(alpha = shadowA * 0.38f),
+                        Color.Black.copy(alpha = shadowA * 0.30f),
                         Color.Transparent
                     ),
-                    center = Offset(c.x, c.y + r * 0.12f),
-                    radius = r * 1.18f
+                    center = c,
+                    radius = r * 1.10f
                 ),
-                radius = r * 1.10f,
-                center = Offset(c.x, c.y + r * 0.06f)
+                radius = r * 1.04f,
+                center = c
             )
         }
 

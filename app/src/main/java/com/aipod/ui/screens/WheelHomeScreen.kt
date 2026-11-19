@@ -343,43 +343,9 @@ internal fun WheelHome(
     Box(Modifier.fillMaxSize()) {
         WheelBackdrop(current = currentTrack, red = appleRed)
         Column(Modifier.fillMaxSize()) {
-            // 首页（Root）不再显示「音乐库」标题和下方说明文字——滚轮上方就是纯列表屏幕。
-            // 子层级仍保留标题，方便用户知道自己在哪一层。
-            if (node !is WheelNode.Root) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            effectiveNode.title,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = Color.White,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        val sub = when {
-                            loading -> "加载中…"
-                            loadError != null -> loadError ?: ""
-                            items.isEmpty() -> effectiveNode.hint
-                            else -> "共 ${items.size} 项 · 转动滚轮选择"
-                        }
-                        Text(
-                            sub,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.75f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-                // 首页隐藏标题后，屏幕区自己补状态栏避让
-            } else {
-                Spacer(Modifier.statusBarsPadding())
-            }
+            // 所有层级（含二级列表）都不显示标题与说明小字——滚轮上方就是纯列表屏幕，
+            // 省下的高度让列表多显示一行。加载中/错误/空态由列表区的独立提示承担。
+            Spacer(Modifier.statusBarsPadding())
 
             if (!statusLine.isNullOrBlank()) {
                 Text(
@@ -570,10 +536,28 @@ internal sealed class WheelItem {
     data class Action(val key: String, val title: String, val subtitle: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) : WheelItem()
 }
 
+/**
+ * 拉取全部分页的歌曲。飞牛 /track/list 每页最多 100 首，只取第 1 页会漏掉其余曲目；
+ * 这里按 total 循环到取满为止。WebDAV / 本地的 loader 第 1 页即返回全部、第 2 页为空，
+ * 循环会自然终止，因此三种音源统一走这里没有副作用。设 100 页上限兜底防止异常死循环。
+ */
+private suspend fun loadAllSongs(data: SourceBrowserData): List<com.aipod.data.Track> {
+    val all = mutableListOf<com.aipod.data.Track>()
+    var page = 1
+    while (page <= 100) {
+        val (list, total) = data.loadSongs(page)
+        if (list.isEmpty()) break
+        all.addAll(list)
+        if (total > 0 && all.size >= total) break
+        page++
+    }
+    return all
+}
+
 /** 根据节点异步加载条目（复用 SourceBrowserData 的 loader）。 */
 private suspend fun loadNode(node: WheelNode, data: SourceBrowserData): List<WheelItem> = when (node) {
     WheelNode.Root -> buildRoot(data)
-    WheelNode.Songs -> data.loadSongs(1).first.let { list -> list.mapIndexed { i, t -> t.toWheel(i, list) } }
+    WheelNode.Songs -> loadAllSongs(data).let { list -> list.mapIndexed { i, t -> t.toWheel(i, list) } }
     WheelNode.Albums -> data.loadAlbums().map {
         WheelItem.Op(WheelNode.AlbumDetail(it), it.name, it.subtitle, it.coverUrl, it.embeddedAudioUrl)
     }
@@ -593,7 +577,7 @@ private suspend fun loadNode(node: WheelNode, data: SourceBrowserData): List<Whe
     WheelNode.Favorites -> {
         // 从当前音源曲库中筛出已收藏曲目（收藏按 WebDAV/FNOS/本地 分表，取当前源那一表）
         val favIds = MusicBoxApp.instance.currentFavorites()
-        val all = data.loadSongs(1).first
+        val all = loadAllSongs(data)
         val favTracks = all.filter { it.id in favIds }
         favTracks.mapIndexed { i, t -> t.toWheel(i, favTracks) }
     }
