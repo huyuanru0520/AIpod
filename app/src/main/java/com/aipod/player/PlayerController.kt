@@ -54,6 +54,9 @@ object PlayerController {
     private var pollJob: Job? = null
     private var transcodeJob: Job? = null
 
+    /** 音源真实性探测去重：同一 URL 只探一次（进程内），避免切歌反复发 Range 请求。 */
+    private val probedUrls = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     /** 播放快照节流：记录上次写盘时间，播放中最多每 4 秒落一次盘，避免 500ms 轮询刷爆 DataStore。 */
     private var lastPersistAt = 0L
     private val PERSIST_INTERVAL_MS = 4_000L
@@ -199,8 +202,20 @@ object PlayerController {
                         "切歌 index=${_currentIndex.value} title=${mediaItem?.mediaMetadata?.title}"
                     )
                     // 通知栏 / 锁屏的专辑封面：Media3 只认 artworkData，这里补上
-                    _queue.value.getOrNull(_currentIndex.value)?.let {
-                        pushArtwork(_currentIndex.value, it)
+                    val nowPlaying = _queue.value.getOrNull(_currentIndex.value)
+                    nowPlaying?.let { pushArtwork(_currentIndex.value, it) }
+                    // 音源真实性探测：任何一次真正切歌（点列表 / 下一首 / 冷启动恢复）都会走到这里。
+                    // 每个 URL 进程内只探一次；异步 + Range 64 字节，不改播放链路、不依赖调试模式。
+                    if (nowPlaying != null && nowPlaying.streamUrl.startsWith("http", ignoreCase = true)
+                        && probedUrls.add(nowPlaying.streamUrl)
+                    ) {
+                        scope.launch {
+                            runCatching {
+                                com.aipod.data.AudioSourceProbe.probeAndLog(
+                                    nowPlaying, MusicBoxApp.instance.okHttpClient, "Probe.${nowPlaying.source}"
+                                )
+                            }.onFailure { CrashLogger.error("Probe", it) }
+                        }
                     }
                     // AAC 256k 档：切歌后继续为后面几首准备转码版本（不打断当前播放）
                     if (MusicBoxApp.instance.audioQuality.value == AudioQuality.AAC_256) {
@@ -454,20 +469,6 @@ object PlayerController {
         }
         // 兜底：setMediaItems 之后即便没有触发 onMediaItemTransition，也把首曲封面写进通知
         pushArtwork(idx, first)
-        // 音源真实性探测（仅调试模式、仅当前首曲、异步，不影响播放链路）：
-        // 用一次极小 Range 请求读取响应头与文件头魔数，判定飞牛/WebDAV 返回的是原始无损字节
-        // 还是被服务端转码成了 mp3/aac。结论写入日志，供设置页查看/导出。
-        if (MusicBoxApp.instance.debugMode.value && first.streamUrl.startsWith("http", ignoreCase = true)) {
-            scope.launch {
-                runCatching {
-                    com.aipod.data.AudioSourceProbe.probeAndLog(
-                        first,
-                        MusicBoxApp.instance.okHttpClient,
-                        "Probe.${first.source}"
-                    )
-                }.onFailure { CrashLogger.error("Probe", it) }
-            }
-        }
         // 选「AAC 256kbps」时，后台把后面几首转成 256k AAC，轮到播放时自动换成缓存文件；
         // 当前这首直接原码率播放（转码要下载整文件，等待会明显拖慢起播）。
         if (MusicBoxApp.instance.audioQuality.value == AudioQuality.AAC_256) {
