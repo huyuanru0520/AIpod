@@ -104,6 +104,7 @@ import androidx.media3.common.Player
 import androidx.navigation.NavController
 import com.aipod.MusicBoxApp
 import com.aipod.data.LyricsRepo
+import com.aipod.data.PlayMode
 import com.aipod.data.SourceType
 import com.aipod.data.Track
 import com.aipod.player.PlayerController
@@ -111,7 +112,6 @@ import com.aipod.ui.components.BareCover
 import com.aipod.ui.components.ClickWheel
 import com.aipod.ui.components.CoverImage
 import com.aipod.ui.components.HiResBadge
-import com.aipod.ui.components.PlayModeHalo
 import com.aipod.ui.components.fadeInList
 import com.aipod.ui.components.glassHighlight
 import com.aipod.ui.components.rememberCoverBitmap
@@ -148,7 +148,6 @@ fun PlayerScreen(navController: NavController) {
     val repeatMode by PlayerController.repeatMode.collectAsState()
     val shuffle by PlayerController.shuffle.collectAsState()
     val playMode by PlayerController.playMode.collectAsState()
-    val playModeEvent by PlayerController.playModeEvent.collectAsState()
     val playError by PlayerController.error.collectAsState()
     val current = if (idx in queue.indices) queue[idx] else null
 
@@ -156,8 +155,13 @@ fun PlayerScreen(navController: NavController) {
     val scope = rememberCoroutineScope()
     val shakeContext = LocalContext.current
     val shakeView = LocalView.current
-    // 摇一摇切换播放模式（随机 / 列表循环 / 单曲循环）：仅在播放页可见时监听。
-    DisposableEffect(Unit) {
+    val volume by MusicBoxApp.instance.volume.collectAsState()
+    var volumeActive by remember { mutableStateOf(false) }   // 滚轮调音量时，进度条就地变音量条
+    var menuOpen by remember { mutableStateOf(false) }      // MENU：本页队列列表
+    var progressMode by remember { mutableStateOf(false) }   // 中心键：进度模式
+    // 摇一摇切换播放模式（随机 / 列表循环 / 单曲循环）：仅在播放队列页打开时监听。
+    DisposableEffect(menuOpen) {
+        if (!menuOpen) return@DisposableEffect onDispose { }
         val detector = ShakeDetector(shakeContext) {
             PlayerController.cyclePlayMode()
             Haptics.click(shakeContext, shakeView)
@@ -165,10 +169,6 @@ fun PlayerScreen(navController: NavController) {
         if (detector.isAvailable()) detector.start()
         onDispose { detector.stop() }
     }
-    val volume by MusicBoxApp.instance.volume.collectAsState()
-    var volumeActive by remember { mutableStateOf(false) }   // 滚轮调音量时，进度条就地变音量条
-    var menuOpen by remember { mutableStateOf(false) }      // MENU：本页队列列表
-    var progressMode by remember { mutableStateOf(false) }   // 中心键：进度模式
     // 进度模式下滚轮调进度的本地累积值：不依赖播放器异步位置，做到逐格连续、精确到秒、快速滑动跟手。
     // null = 尚未进入进度调节（进度条照常显示实时播放位置）；非 null = 用户正在用滚轮调，显示这个值。
     var wheelSeekMs by remember { mutableStateOf<Long?>(null) }
@@ -204,9 +204,6 @@ fun PlayerScreen(navController: NavController) {
     Box(Modifier.fillMaxSize()) {
         // 竖屏背景与横屏一致：模糊当前封面 + 主色调 + 暗化渐变
         CoverBackdrop(current)
-        // 摄像头挖孔区的播放模式环：紧贴摄像头外圈，平时隐藏，摇一摇切换模式时短暂浮现。
-        // 放在最外层、铺满全屏，才能覆盖到状态栏挖孔位置；不消费触摸事件。
-        PlayModeHalo(mode = playMode, trigger = playModeEvent, modifier = Modifier.fillMaxSize())
         // 播放页保留状态栏（见 MainActivity.keepStatusBarVisible）：内容从状态栏下方开始，
         // 但背景仍在 Box 里铺满整屏，状态栏透出的是封面模糊图而不是黑条。
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -325,6 +322,7 @@ fun PlayerScreen(navController: NavController) {
                                     queue = queue,
                                     selectedIndex = selectedQueueIndex,
                                     currentIndex = idx,
+                                    playMode = playMode,
                                     onSelect = { selectedQueueIndex = it }
                                 )
                                 "lyrics" -> LyricsView(
@@ -431,7 +429,7 @@ fun PlayerScreen(navController: NavController) {
                         // 略微上移，避免整块压在屏幕底部
                         modifier = Modifier
                             .align(Alignment.CenterHorizontally)
-                            .offset(y = if (menuOpen) 0.dp else (-18).dp)
+                            .offset(y = (-18).dp)
                     )
                     Spacer(Modifier.height(24.dp))
                 }
@@ -455,6 +453,7 @@ private fun QueueMenuList(
     queue: List<Track>,
     selectedIndex: Int,
     currentIndex: Int,
+    playMode: PlayMode,
     onSelect: (Int) -> Unit
 ) {
     val listState = rememberLazyListState()
@@ -471,11 +470,20 @@ private fun QueueMenuList(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("播放队列", style = MaterialTheme.typography.titleSmall, color = Color.White)
             Spacer(Modifier.weight(1f))
-            Text(
-                "滚轮选歌 · 中心确认",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.5f)
-            )
+            // 播放模式指示取代原「滚轮选歌 · 中心确认」：摇一摇在本页切换，图标沿用既有的三态样式
+            val modeIcon = when (playMode) {
+                PlayMode.SHUFFLE -> Icons.Default.Shuffle
+                PlayMode.LIST -> Icons.Default.Repeat
+                PlayMode.ONE -> Icons.Default.RepeatOne
+            }
+            val modeLabel = when (playMode) {
+                PlayMode.SHUFFLE -> "随机播放"
+                PlayMode.LIST -> "列表循环"
+                PlayMode.ONE -> "单曲循环"
+            }
+            Icon(modeIcon, contentDescription = modeLabel, tint = BrandRed, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(modeLabel, style = MaterialTheme.typography.labelSmall, color = BrandRed)
         }
         Spacer(Modifier.height(10.dp))
         LazyColumn(
