@@ -450,9 +450,10 @@ private fun AppRoot() {
                     NavHost(
                         navController,
                         startDestination = "library",
-                        // 页面切换动画：只用淡入淡出，去掉所有左右滑动转场（含返回）。
-                        // 需求：除 CoverFlow 自身的横向滑动外，其它页面不带任何左右手势/滑动观感；
-                        // 播放页仍保留从底部升起（见其独立 enter/exit），那是纵向不涉及左右。
+                        // 页面切换动画：所有页面统一纯淡入淡出，不带任何位移/滑动转场。
+                        // 需求：从首页进任何页面（含正在播放），下半屏滚轮视觉上不动，只切换上半屏内容；
+                        // 播放页此前用 slideInVertically 从底部升起，会带动整个页面（含滚轮）跳动一下，
+                        // 与设置/歌曲/歌单页观感不一致，故移除，统一走这里的全局淡入淡出。
                         enterTransition = { fadeIn(tween(180)) },
                         exitTransition = { fadeOut(tween(140)) },
                         popEnterTransition = { fadeIn(tween(180)) },
@@ -460,15 +461,7 @@ private fun AppRoot() {
                     ) {
                         composable("library") { LibraryScreen(navController) }
                         composable("settings") { WheelSettingsScreen(navController) }
-                        composable(
-                            "player",
-                            enterTransition = {
-                                fadeIn(tween(200)) + slideInVertically(tween(260)) { it / 10 }
-                            },
-                            popExitTransition = {
-                                fadeOut(tween(180)) + slideOutVertically(tween(220)) { it / 10 }
-                            }
-                        ) { PlayerScreen(navController) }
+                        composable("player") { PlayerScreen(navController) }
                         composable("songdetail") { com.aipod.ui.screens.SongDetailScreen(navController) }
                     }
                 }
