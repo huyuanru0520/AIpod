@@ -226,13 +226,11 @@ object CrashLogger {
     }
 
     private fun append(line: String) {
-        // 调试模式关闭时连 Logcat 都不写（Log.d 仍要走一遍 log buffer，高频调用会拖慢主线程）。
-        // 需要看 Logcat 时用 `adb shell setprop log.tag.NASMusic DEBUG` 打开 isLoggable 分支。
-        if (!enabled) {
-            if (Log.isLoggable(TAG, Log.DEBUG)) Log.d(TAG, line)
-            return
-        }
-        Log.d(TAG, line)
+        // 日志始终写入内部文件（filesDir/NASMusic_log.txt），这样「运行日志」页的
+        // 查看 / 复制 / 另存 永远有内容，不必依赖调试模式开关。
+        // 调试模式只控制是否把日志同步到公共 Download 目录（见 flushNow / scheduleFlush）。
+        // 之前这里在 enabled=false 时直接 return，导致日志页点了没内容、导出为空。
+        if (Log.isLoggable(TAG, Log.DEBUG) || enabled) Log.d(TAG, line)
         writeFile(line)
     }
 
@@ -342,7 +340,18 @@ object CrashLogger {
      */
     fun saveTextToDownloads(filename: String, mime: String, text: String): String? {
         val ctx = appContext ?: return null
-        val ok = writeTextViaMediaStore(ctx, filename, mime, text)
+        // Android 10+ 走 MediaStore；以下走公共 Download 目录直写（老设备无分区存储）。
+        val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            writeTextViaMediaStore(ctx, filename, mime, text)
+        } else {
+            runCatching {
+                @Suppress("DEPRECATION")
+                val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (!dir.exists()) dir.mkdirs()
+                File(dir, filename).writeText(text)
+                true
+            }.getOrDefault(false)
+        }
         return if (ok) "/storage/emulated/0/Download/$filename" else null
     }
 

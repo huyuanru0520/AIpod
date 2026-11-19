@@ -42,7 +42,19 @@ object LocalMusicScanner {
         val found = mutableListOf<Track>()
         var dirsVisited = 0
         var filesSeen = 0
-        walk(context, treeUri, found, onProgress, { dirsVisited++ }, { filesSeen++ })
+        // 先解析根 tree 的 documentId；始终基于「根 treeUri + docId」构造子 URI，
+        // 避免部分 provider 对 document URI 再次 getDocumentId 返回空导致递归提前结束。
+        val rootId = try {
+            DocumentsContract.getTreeDocumentId(treeUri)
+        } catch (e: Exception) {
+            runCatching { DocumentsContract.getDocumentId(treeUri) }.getOrNull()
+        }
+        CrashLogger.info("LocalScan", "根 URI=$treeUri 根ID=$rootId")
+        if (rootId == null) {
+            CrashLogger.info("LocalScan", "无法解析根 documentId，扫描中止")
+            return@withContext found
+        }
+        walk(context, treeUri, rootId, found, onProgress, { dirsVisited++ }, { filesSeen++ })
         found.sortBy { "${it.folder}/${it.title}".lowercase() }
         val summary = "本地扫描完成：${found.size} 首（遍历 $dirsVisited 个目录 / 见到 $filesSeen 个文件）根=$treeUri"
         Log.i(TAG, summary)
@@ -52,7 +64,8 @@ object LocalMusicScanner {
 
     private suspend fun walk(
         context: Context,
-        dirUri: Uri,
+        treeUri: Uri,
+        parentDocId: String,
         out: MutableList<Track>,
         onProgress: suspend (Int, String) -> Unit,
         onDir: () -> Unit = {},
@@ -60,13 +73,10 @@ object LocalMusicScanner {
     ) {
         onDir()
         val childrenUri = try {
-            DocumentsContract.buildChildDocumentsUriUsingTree(
-                dirUri,
-                DocumentsContract.getDocumentId(dirUri)
-            )
+            DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
         } catch (e: Exception) {
-            // 某些厂商对 tree uri 不支持 buildChild，回退到直接用 tree uri 查子项
-            dirUri
+            Log.w(TAG, "构造子目录 URI 失败 $parentDocId: ${e.message}")
+            return
         }
         val projection = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
@@ -77,12 +87,19 @@ object LocalMusicScanner {
         val cursor = try {
             context.contentResolver.query(childrenUri, projection, null, null, null)
         } catch (e: Exception) {
-            Log.w(TAG, "查询目录失败 $dirUri: ${e.message}")
-            null
-        } ?: return
+            Log.w(TAG, "查询目录失败 $parentDocId: ${e.message}")
+            CrashLogger.info("LocalScan", "查询目录失败 $parentDocId: ${e.message}")
+            return
+        } ?: run {
+            CrashLogger.info("LocalScan", "查询返回空 cursor：$parentDocId")
+            return
+        }
 
         cursor.use { c ->
-            if (!c.moveToFirst()) return
+            if (!c.moveToFirst()) {
+                CrashLogger.info("LocalScan", "目录为空：$parentDocId")
+                return
+            }
             val idIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
             val nameIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
             val mimeIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
@@ -94,14 +111,18 @@ object LocalMusicScanner {
                 if (docId == null) continue
                 onFile()
                 if (isDir) {
-                    val childUri = DocumentsContract.buildDocumentUriUsingTree(dirUri, docId)
-                    walk(context, childUri, out, onProgress, onDir, onFile)
-                } else if (mime.startsWith("audio/") || name.extensionLower() in AUDIO_EXT) {
-                    val uri = DocumentsContract.buildDocumentUriUsingTree(dirUri, docId)
-                    val track = toTrack(context, uri, name, out.size)
-                    if (track != null) {
-                        out.add(track)
-                        onProgress(out.size, name)
+                    walk(context, treeUri, docId, out, onProgress, onDir, onFile)
+                } else {
+                    val isAudio = mime.startsWith("audio/") || name.extensionLower() in AUDIO_EXT
+                    // 逐文件判定写日志：flac/m4a 扫不到时能直接从「运行日志」看出是没遍历到还是没判定为音频
+                    CrashLogger.info("LocalScan", "文件[$name] mime=$mime 音频=$isAudio")
+                    if (isAudio) {
+                        val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                        val track = toTrack(context, uri, name, out.size)
+                        if (track != null) {
+                            out.add(track)
+                            onProgress(out.size, name)
+                        }
                     }
                 }
             } while (c.moveToNext())

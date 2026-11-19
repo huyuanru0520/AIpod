@@ -36,6 +36,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
@@ -142,8 +144,10 @@ fun WheelSettingsScreen(navController: NavController) {
     val localScanProgress by app.localScanProgress.collectAsState()
     val localTracks by app.localLibrary.collectAsState()
     val localCount = localTracks.size
+    val localFolderUri by app.localFolderUri.collectAsState()
     // 日志导出：下载目录里日志文件的真实路径、大小与写入通道结果
     var logInfo by remember { mutableStateOf(runCatching { CrashLogger.logFileInfo() }.getOrDefault("")) }
+    var logPreview by remember { mutableStateOf("") }
 
     val node = stack.last()
 
@@ -230,10 +234,11 @@ fun WheelSettingsScreen(navController: NavController) {
     val items: List<SettingItem> = when (node) {
         SettingsNode.Root -> buildRootSettings(
             sourceMode, audioQuality, scanPace, hapticStrength, debugMode, showDescriptions,
-            webDav, fnos, webDavScanning, coverCacheSize, transcodeSize, localCount, localScanning, localScanProgress
+            webDav, fnos, webDavScanning, coverCacheSize, transcodeSize, localCount, localScanning, localScanProgress,
+            !localFolderUri.isNullOrBlank()
         )
         SettingsNode.Tabs -> buildTabsSettings(visibleTabs)
-        SettingsNode.Logs -> buildLogsSettings(debugMode, logInfo)
+        SettingsNode.Logs -> buildLogsSettings(debugMode, logInfo, showLogs, logPreview)
         SettingsNode.About -> buildAboutSettings()
         SettingsNode.WebDavForm, SettingsNode.FnosForm -> emptyList()
     }
@@ -291,6 +296,19 @@ fun WheelSettingsScreen(navController: NavController) {
                     else { statusLine = "开始扫描 WebDAV…"; app.startWebDavScan(c) }
                 }
                 "scanlocal" -> localFolderLauncher.launch(null)
+                "rescanlocal" -> {
+                    // 用已保存的文件夹重新扫描；没有保存过则退回到选文件夹
+                    val started = app.rescanLocal(context) { count ->
+                        if (count >= 0) {
+                            statusLine = if (count > 0) "重新扫描完成：$count 首" else "仍未找到音频文件，可导出日志查看逐文件判定"
+                            if (count > 0) scope.launch { app.setSource(SourceMode.LOCAL) }
+                        } else statusLine = "重新扫描失败，请查看日志"
+                    }
+                    if (!started) {
+                        statusLine = "尚无已保存的文件夹，请先选文件夹"
+                        localFolderLauncher.launch(null)
+                    }
+                }
                 "test" -> {
                     val c = webDav
                     if (c == null) statusLine = "请先保存 WebDAV 连接"
@@ -336,13 +354,27 @@ fun WheelSettingsScreen(navController: NavController) {
                         statusLine = "日志已刷新并复制"
                     }
                 }
-                "savelog" -> logSaveLauncher.launch("NASMusic_log.txt")
+                "savelog" -> scope.launch {
+                    // 直接写到下载目录固定路径，不弹系统文件选择器（纯转轮页弹窗难操作）。
+                    val path = withContext(Dispatchers.IO) {
+                        CrashLogger.saveTextToDownloads("NASMusic_log.txt", "text/plain", CrashLogger.fullText())
+                    }
+                    statusLine = if (path != null) "日志已保存到 $path" else "保存失败：请检查存储权限"
+                    logInfo = withContext(Dispatchers.IO) { runCatching { CrashLogger.logFileInfo() }.getOrDefault("") }
+                }
                 "clearlog" -> scope.launch {
                     withContext(Dispatchers.IO) { CrashLogger.clear() }
                     logInfo = withContext(Dispatchers.IO) { runCatching { CrashLogger.logFileInfo() }.getOrDefault("") }
                     statusLine = "日志已清空"
                 }
-                "logdetails" -> showLogs = !showLogs
+                "logdetails" -> {
+                    showLogs = !showLogs
+                    if (showLogs) scope.launch {
+                        logPreview = withContext(Dispatchers.IO) {
+                            runCatching { CrashLogger.fullText() }.getOrDefault("")
+                        }
+                    }
+                }
                 "back" -> navController.popBackStack()
             }
             is SettingItem.Info -> Unit
@@ -424,7 +456,10 @@ fun WheelSettingsScreen(navController: NavController) {
                         onSaved = { pop() },
                         onCancel = { pop() }
                     )
-                    SettingsNode.Logs -> LogsScreenBody(showDetails = showLogs)
+                    // 日志页也用统一列表渲染，保证「复制 / 另存 / 展开 / 清空」选项在屏幕上可见，
+                    // 转轮选中才有反馈。之前这里单独渲染 LogsScreenBody，把选项列表整个挡住，
+                    // 用户转轮时在动却看不到任何选项，误以为「日志导出界面没有具体选项」。
+                    SettingsNode.Logs -> SettingsList(items = items, selected = selected, showDescriptions = true)
                     else -> SettingsList(items = items, selected = selected, showDescriptions = showDescriptions)
                 }
             }
@@ -490,7 +525,8 @@ private fun SettingItem.subtitle(): String = when (this) {
 private fun buildRootSettings(
     source: SourceMode, quality: AudioQuality,
     scanPace: Long, haptic: Int, debug: Boolean, showDescriptions: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
-    coverSize: Long, transcodeSize: Long, localCount: Int, localScanning: Boolean, localScanProgress: String
+    coverSize: Long, transcodeSize: Long, localCount: Int, localScanning: Boolean, localScanProgress: String,
+    hasLocalFolder: Boolean
 ): List<SettingItem> {
     val sourceName = when (source) {
         SourceMode.WEBDAV -> "WebDAV"
@@ -509,9 +545,14 @@ private fun buildRootSettings(
     out += SettingItem.Nav("webdav", "WebDAV 连接", if (webDav != null) "已配置" else "未配置", Icons.Default.Link)
     out += SettingItem.Nav("fnos", "飞牛音乐登录", if (fnos != null) "已登录" else "未登录", Icons.Default.Storage)
     out += SettingItem.Action(
-        "scanlocal", "扫描本地音乐",
-        if (localScanning) localScanProgress.ifBlank { "扫描中…" } else "已收录 $localCount 首 · 选文件夹",
+        "scanlocal", "扫描本地音乐（选新文件夹）",
+        if (localScanning) localScanProgress.ifBlank { "扫描中…" } else "已收录 $localCount 首",
         Icons.Default.Folder
+    )
+    out += SettingItem.Action(
+        "rescanlocal", "重新扫描本地音乐",
+        if (!hasLocalFolder) "尚未选过文件夹" else "用已保存的文件夹重扫 · 已收录 $localCount 首",
+        Icons.Default.Refresh
     )
     out += SettingItem.Action("scan", "立即扫描 WebDAV", if (scanning) "扫描中…" else "扫描音乐库", Icons.Default.Storage)
     out += SettingItem.Action("test", "测试连接 / 诊断", "WebDAV 连接自检", Icons.Default.Link)
@@ -545,14 +586,22 @@ private fun buildTabsSettings(visible: List<String>): List<SettingItem> {
     }
 }
 
-private fun buildLogsSettings(debug: Boolean, logInfo: String): List<SettingItem> {
+private fun buildLogsSettings(debug: Boolean, logInfo: String, showDetails: Boolean, logPreview: String): List<SettingItem> {
     val out = mutableListOf<SettingItem>()
-    out += SettingItem.Action("copylog", "刷新并复制日志", "复制到剪贴板", Icons.Default.Description)
-    out += SettingItem.Action("savelog", "另存日志文件", "保存为 txt 文件", Icons.Default.SaveAs)
-    out += SettingItem.Action("logdetails", "展开 / 收起日志内容", "查看最近日志", Icons.Default.Description)
+    out += SettingItem.Action("copylog", "复制日志到剪贴板", "可直接粘贴发给他人", Icons.Default.ContentCopy)
+    out += SettingItem.Action("savelog", "另存日志到下载目录", "生成 NASMusic_log.txt", Icons.Default.SaveAs)
+    out += SettingItem.Action("logdetails", if (showDetails) "收起日志内容" else "展开日志内容", "在下方查看最近日志", Icons.Default.Description)
     out += SettingItem.Action("clearlog", "清空日志", "清除全部记录", Icons.Default.Delete)
     out += SettingItem.Info("日志位置", logInfo)
-    if (!debug) out += SettingItem.Info("提示", "调试模式关闭时不生成运行日志；崩溃日志仍会保留。")
+    // 展开时把最近日志作为一个可见条目塞进列表，转轮可上下浏览（不再藏进单独界面）。
+    if (showDetails) {
+        out += SettingItem.Info("—— 最近日志（最新在末尾）——", logPreview.takeLast(2000).ifBlank { "（暂无日志）" })
+    }
+    out += SettingItem.Info(
+        "说明",
+        if (debug) "运行中日志持续写入内部文件，并同步到下方下载目录路径。"
+        else "运行日志持续记录，仅在「另存日志」时写出到下载目录。"
+    )
     return out
 }
 

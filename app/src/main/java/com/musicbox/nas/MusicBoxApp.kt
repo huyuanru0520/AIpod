@@ -146,6 +146,8 @@ class MusicBoxApp : Application() {
     /** 本地扫描进度文案（App 级，页面重建不丢）。 */
     val localScanProgress = MutableStateFlow("")
     val localScanning = MutableStateFlow(false)
+    /** 用户授权的本地音乐文件夹 tree URI（持久化，供「重新扫描」复用，无需再次选文件夹）。 */
+    val localFolderUri = MutableStateFlow<String?>(null)
 
     val webDavScanProgress = MutableStateFlow("")
     val webDavScanning = MutableStateFlow(false)
@@ -519,6 +521,8 @@ class MusicBoxApp : Application() {
         favLocal.value = p[FAV_LOCAL]?.let { decodeIds(it) } ?: emptySet()
         // 本地音乐曲库：从 JSON 恢复扫描结果
         p[LOCAL_LIBRARY]?.let { runCatching { localLibrary.value = decodeTracks(it) } }
+        // 已授权的本地文件夹 URI：供「重新扫描」直接复用
+        localFolderUri.value = p[LOCAL_FOLDER]
         // 有缓存就直接恢复索引，冷启动不再发起整库 PROPFIND
         restoreDavLibraryCache()
         CrashLogger.mark(
@@ -729,6 +733,29 @@ class MusicBoxApp : Application() {
      */
     fun startLocalScan(context: Context, treeUri: android.net.Uri, onDone: ((Int) -> Unit)? = null) {
         if (localScanning.value) return
+        // 记住这次选的文件夹，供「重新扫描」直接复用
+        localFolderUri.value = treeUri.toString()
+        appScope.launch { dataStore.edit { it[LOCAL_FOLDER] = treeUri.toString() } }
+        runLocalScan(context, treeUri, onDone)
+    }
+
+    /** 用已保存的文件夹重新扫描；没有保存过返回 false。 */
+    fun rescanLocal(context: Context, onDone: ((Int) -> Unit)? = null): Boolean {
+        val raw = localFolderUri.value ?: return false
+        val uri = runCatching { android.net.Uri.parse(raw) }.getOrNull() ?: return false
+        if (localScanning.value) return true
+        // 重新取得持久读取授权（某些 ROM 冷启动后授权会失效）
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+        runLocalScan(context, uri, onDone)
+        return true
+    }
+
+    private fun runLocalScan(context: Context, treeUri: android.net.Uri, onDone: ((Int) -> Unit)? = null) {
+        if (localScanning.value) return
         appScope.launch {
             localScanning.value = true
             localScanProgress.value = "正在扫描本地音乐…"
@@ -739,7 +766,7 @@ class MusicBoxApp : Application() {
                 }
                 setLocalLibrary(tracks)
                 val msg = if (tracks.isEmpty())
-                    "本地扫描完成：未找到音频文件（请确认所选文件夹内含 mp3/flac/m4a 等）"
+                    "本地扫描完成：未找到音频文件（请确认所选文件夹内含 mp3/flac/m4a 等，或导出日志查看逐文件判定）"
                 else "本地扫描完成：${tracks.size} 首"
                 localScanProgress.value = msg
                 CrashLogger.info("LocalScan", msg)
@@ -970,3 +997,5 @@ private val FAV_FNOS = stringPreferencesKey("favorites_fnos")
 private val FAV_LOCAL = stringPreferencesKey("favorites_local")
 /** 本地音乐曲库：扫描结果 JSON。 */
 private val LOCAL_LIBRARY = stringPreferencesKey("local_library")
+/** 用户授权的本地音乐文件夹 tree URI，供「重新扫描」复用。 */
+private val LOCAL_FOLDER = stringPreferencesKey("local_folder_uri")
