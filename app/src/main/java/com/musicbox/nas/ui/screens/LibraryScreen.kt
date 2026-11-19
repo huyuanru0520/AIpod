@@ -85,6 +85,7 @@ import com.musicbox.nas.data.fnos.FnosCatalog
 import com.musicbox.nas.data.webdav.DavAlbum
 import com.musicbox.nas.data.webdav.DavLibrary
 import com.musicbox.nas.player.PlayerController
+import com.musicbox.nas.ui.components.ClickWheel
 import com.musicbox.nas.ui.components.CoverImage
 import com.musicbox.nas.ui.components.TrackRow
 import com.musicbox.nas.util.CrashLogger
@@ -1578,19 +1579,7 @@ private fun LocalSection(navController: NavController) {
     val app = MusicBoxApp.instance
     val tracks by app.localLibrary.collectAsState()
     if (tracks.isEmpty()) {
-        Column(
-            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text("尚未收录本地音乐", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "到「设置 → 扫描本地音乐」选择一个音乐文件夹",
-                color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.bodySmall,
-                textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 32.dp)
-            )
-        }
+        LocalEmptyHint(navController)
         return
     }
     val data = remember(tracks) { buildLocalData(tracks) }
@@ -1600,6 +1589,63 @@ private fun LocalSection(navController: NavController) {
         memoryKey = "local",
         statusLine = data.status
     )
+}
+
+/**
+ * 本地曲库为空时的引导页。
+ *
+ * library 路由是纯 iPod 转轮交互：没有 Dock、没有触摸手势，系统返回键在本页只会把 App 退到后台。
+ * 因此这里必须保留转轮作为唯一交互——否则用户把音源切到「本地音乐」却一首都没收录时，
+ * 既进不了设置重新扫描，也切不回其它音源，会彻底卡死。
+ * 中心键 / MENU / 长按 MENU 一律前往设置，保证任何转轮操作都能脱困。
+ */
+@Composable
+private fun LocalEmptyHint(navController: NavController) {
+    val isPlaying by PlayerController.isPlaying.collectAsState()
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Text(
+                    "尚未收录本地音乐",
+                    color = Color.White.copy(alpha = 0.85f),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "到「设置 → 扫描本地音乐」选择一个音乐文件夹",
+                    color = Color.White.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 32.dp)
+                )
+                Spacer(Modifier.height(20.dp))
+                Text(
+                    "转动滚轮 · 按中心键或 MENU 前往设置",
+                    color = Color.White.copy(alpha = 0.45f),
+                    style = MaterialTheme.typography.labelSmall,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+        Box(Modifier.fillMaxWidth().padding(bottom = 40.dp), Alignment.Center) {
+            ClickWheel(
+                diameter = 240.dp,
+                isPlaying = isPlaying,
+                onRotate = {},
+                onPlayPause = { if (isPlaying) PlayerController.pause() else PlayerController.play() },
+                onPrevious = { PlayerController.previous() },
+                onNext = { PlayerController.next() },
+                onRewind = {},
+                onForward = {},
+                onMenu = { navController.navigate("settings") },
+                onMenuHome = { navController.navigate("settings") },
+                onConfirm = { navController.navigate("settings") }
+            )
+        }
+    }
 }
 
 @Composable
