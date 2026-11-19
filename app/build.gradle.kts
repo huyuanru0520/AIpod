@@ -22,15 +22,16 @@ val hasReleaseKeystore = keystorePropsFile.exists() &&
 
 android {
     namespace = "com.aipod"
-    // Media3 1.5.1 requires compileSdk >= 35
-    compileSdk = 35
+    // Media3 1.9.3 / USB bit-perfect 库要求 compileSdk >= 36
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.aipod"
-        minSdk = 21
+        // Media3 1.9.3 (media3-session) 要求 minSdk >= 23
+        minSdk = 23
         targetSdk = 34
-        versionCode = 101
-        versionName = "4.1.4"
+        versionCode = 102
+        versionName = "4.2.0"
     }
 
     signingConfigs {
@@ -107,18 +108,17 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.4")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
-    // Media3 1.5.1 (ExoPlayer + MediaSession + OkHttp datasource)
-    implementation("androidx.media3:media3-exoplayer:1.5.1")
-    implementation("androidx.media3:media3-exoplayer-dash:1.5.1")
-    implementation("androidx.media3:media3-session:1.5.1")
-    implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
-    implementation("androidx.media3:media3-decoder:1.5.1")
+    // Media3 1.9.3 (ExoPlayer + MediaSession + OkHttp datasource)
+    // 升级到 1.9.3 以便与 USB bit-perfect 库（decent-player，基于 1.9.3 的 AudioSink）对齐。
+    implementation("androidx.media3:media3-exoplayer:1.9.3")
+    implementation("androidx.media3:media3-exoplayer-dash:1.9.3")
+    implementation("androidx.media3:media3-session:1.9.3")
+    implementation("androidx.media3:media3-datasource-okhttp:1.9.3")
+    implementation("androidx.media3:media3-decoder:1.9.3")
 
-    // FFmpeg 软解码扩展（对应 Media3 1.5.x）。
-    // 采用本地 AAR 而非 Maven 坐标：避免其 POM 把 media3 模块固定到 1.5.0 与本工程 1.5.1 混用。
-    // 内含 4 个 ABI 的 libffmpegJNI.so，LOAD 段 0x4000(16KB) 对齐，原生兼容 Android 16；
-    // 包含 alac/flac/aac/mp3/truehd 解码器，用于 MediaCodec 不支持的无损格式兜底。
-    implementation(files("libs/media3-ffmpeg-decoder.aar"))
+    // FFmpeg 软解码扩展：改用 Jellyfin 维护的 1.9.0+1（旧本地 AAR 按 1.5.1 的 Decoder 接口编译，不兼容 1.9.3）。
+    // 其 POM 依赖 media3 1.9.0，Gradle 会解析到本工程声明的 1.9.3，版本一致。
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
 
     // Networking / JSON
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
