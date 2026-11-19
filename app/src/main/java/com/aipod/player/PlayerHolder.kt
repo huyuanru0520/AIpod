@@ -193,7 +193,11 @@ object PlayerHolder {
                 val sink = UsbAudioSink(
                     delegate,
                     ctx.applicationContext,
-                    UsbAudioSinkConfig(bitPerfectEnabled = true, forceRouteToSpeaker = true)
+                    UsbAudioSinkConfig(
+                        bitPerfectEnabled = true,
+                        forceRouteToSpeaker = true,
+                        highGain = app.usbHighGain.value
+                    )
                 )
                 usbSink = sink
                 return sink
@@ -268,5 +272,11 @@ object PlayerHolder {
     fun usbBitPerfectNow(): Boolean? {
         if (activeOutput != "USB 独占") return null
         return runCatching { usbSink?.isUsbBitPerfectNow() == true }.getOrNull()
+    }
+
+    /** 实时切换 HIGH GAIN（满幅 bit-perfect / 音量可调），无需重建播放器。 */
+    fun applyHighGain(on: Boolean) {
+        runCatching { usbSink?.setHighGain(on) }
+            .onFailure { CrashLogger.error("PlayerHolder.applyHighGain", it) }
     }
 }

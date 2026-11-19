@@ -4,6 +4,15 @@
 
 <!-- 推到自己的仓库后，把文末 compare 链接里的 your-name 替换成实际 GitHub 用户名；或直接删掉链接定义，改为纯文本标题。 -->
 
+## [4.3.2] - 2026-11-19
+
+### 变更
+- **HIGH GAIN 开关**：把原先「音量 100% 自动切 bit-perfect」的逻辑改为独立设置「HIGH GAIN（满幅直出）」，默认关。开 = 满幅 bit-perfect 直出、忽略音量；关 = 音量始终可调（整数软件增益）。音量不再触发音质模式自动切换。切换 HIGH GAIN 实时生效，无需重建播放器；设置随配置导入导出。
+- 设置页 USB 独占副标题不再混排音质，音质状态由 HIGH GAIN 开关单独表达。
+
+### 修复
+- **关闭 USB 独占后无法播放（需拔插 DAC 才恢复）**：根因是 `openDevice()` 用 `claimInterface(force=true)` 断开了内核 `snd-usb-audio`，而关闭独占时从不释放该接口，导致内核驱动无法重新接管 DAC、标准 AudioTrack 输出静默。现 `UsbAudioSink.release()` 会 `releaseInterface + close fd`，内核驱动即时重新绑定，无需再物理拔插。
+
 ## [4.3.1] - 2026-11-19
 
 ### 修复（USB 独占输出）

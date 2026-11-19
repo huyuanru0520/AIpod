@@ -186,6 +186,11 @@ class MusicBoxApp : Application() {
      * 任何失败都会自动回退到标准 ExoPlayer，不影响普通播放。
      */
     val usbExclusive = MutableStateFlow(false)
+    /**
+     * HIGH GAIN（仅 USB 独占下生效，默认关）：开 = 满幅 bit-perfect 直出、忽略音量；
+     * 关 = 音量可调（整数软件增益）。与音量值无关，不再按音量自动切换。
+     */
+    val usbHighGain = MutableStateFlow(false)
     /** 转轮音量：0f~1f，设置后立即写入 ExoPlayer 并落盘。 */
     val volume = MutableStateFlow(1f)
     /**
@@ -443,6 +448,14 @@ class MusicBoxApp : Application() {
         CrashLogger.info("Settings", "USB 独占输出=${if (on) "开启" else "关闭"}，状态=${com.aipod.audio.UsbExclusiveAudio.currentStatus().label}")
     }
 
+    /** 切换 HIGH GAIN（满幅 bit-perfect / 音量可调），实时作用于当前 USB sink。 */
+    suspend fun setUsbHighGain(on: Boolean) {
+        usbHighGain.value = on
+        dataStore.edit { it[USB_HIGH_GAIN] = on }
+        com.aipod.player.PlayerHolder.applyHighGain(on)
+        CrashLogger.info("Settings", "HIGH GAIN=${if (on) "开启（满幅 bit-perfect，忽略音量）" else "关闭（音量可调）"}")
+    }
+
     suspend fun setVolume(v: Float) {
         val safe = v.coerceIn(0f, 1f)
         volume.value = safe
@@ -563,6 +576,7 @@ class MusicBoxApp : Application() {
         p[Q_QUALITY]?.let { runCatching { audioQuality.value = AudioQuality.valueOf(it) } }
         // USB 独占输出（默认关）：恢复开关并探测一次当前 DAC 状态（只读，不切链路）
         usbExclusive.value = p[USB_EXCLUSIVE] ?: false
+        usbHighGain.value = p[USB_HIGH_GAIN] ?: false
         if (usbExclusive.value) {
             com.aipod.audio.UsbExclusiveAudio.refreshStatus(this, true)
         }
@@ -953,6 +967,7 @@ class MusicBoxApp : Application() {
             put("visible_tabs", visibleTabs.value.joinToString(","))
             put("audio_quality", audioQuality.value.name)
             put("usb_exclusive", usbExclusive.value)
+            put("usb_high_gain", usbHighGain.value)
             put("debug_mode", debugMode.value)
             put("show_descriptions", showDescriptions.value)
             put("haptic_strength", hapticStrength.value)
@@ -1009,6 +1024,7 @@ class MusicBoxApp : Application() {
         o.optString("audio_quality").takeIf { it.isNotBlank() }
             ?.let { runCatching { setAudioQuality(AudioQuality.valueOf(it)) } }
         if (o.has("usb_exclusive")) setUsbExclusive(o.optBoolean("usb_exclusive"))
+        if (o.has("usb_high_gain")) setUsbHighGain(o.optBoolean("usb_high_gain"))
         if (o.has("debug_mode")) setDebugMode(o.optBoolean("debug_mode"))
         if (o.has("show_descriptions")) setShowDescriptions(o.optBoolean("show_descriptions"))
         if (o.has("haptic_strength")) setHapticStrength(o.optInt("haptic_strength"))
@@ -1093,6 +1109,8 @@ private val T_TABS_ORDERED = booleanPreferencesKey("visible_tabs_ordered_v2")
 private val Q_QUALITY = stringPreferencesKey("audio_quality")
 /** USB 独占输出（实验性，默认关）。 */
 private val USB_EXCLUSIVE = booleanPreferencesKey("usb_exclusive")
+/** HIGH GAIN：满幅 bit-perfect（默认关，音量可调）。 */
+private val USB_HIGH_GAIN = booleanPreferencesKey("usb_high_gain")
 private val P_VOLUME = floatPreferencesKey("wheel_volume")
 private val D_DEBUG = booleanPreferencesKey("debug_mode")
 private val T_SHOW_DESC = booleanPreferencesKey("show_descriptions")

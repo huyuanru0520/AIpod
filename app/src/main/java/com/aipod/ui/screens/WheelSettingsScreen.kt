@@ -117,8 +117,8 @@ fun WheelSettingsScreen(navController: NavController) {
     // 所有设置状态
     val sourceMode by app.sourceMode.collectAsState()
     val audioQuality by app.audioQuality.collectAsState()
-    val currentVolume by app.volume.collectAsState()
     val usbExclusive by app.usbExclusive.collectAsState()
+    val usbHighGain by app.usbHighGain.collectAsState()
     val scanPace by app.scanPaceMs.collectAsState()
     val visibleTabs by app.visibleTabs.collectAsState()
     val debugMode by app.debugMode.collectAsState()
@@ -235,7 +235,7 @@ fun WheelSettingsScreen(navController: NavController) {
     // 构建当前页条目
     val items: List<SettingItem> = when (node) {
         SettingsNode.Root ->         buildRootSettings(
-            sourceMode, audioQuality, usbExclusive, currentVolume, scanPace, hapticStrength, debugMode, showDescriptions,
+            sourceMode, audioQuality, usbExclusive, usbHighGain, scanPace, hapticStrength, debugMode, showDescriptions,
             webDav, fnos, webDavScanning, coverCacheSize, transcodeSize, localCount, localScanning, localScanProgress,
             !localFolderUri.isNullOrBlank()
         )
@@ -298,6 +298,13 @@ fun WheelSettingsScreen(navController: NavController) {
                     } else {
                         statusLine = "播放器重建失败，请查看日志"
                     }
+                }
+                "usbhighgain" -> scope.launch {
+                    val next = !usbHighGain
+                    app.setUsbHighGain(next)
+                    statusLine = if (next)
+                        "HIGH GAIN 已开：满幅 bit-perfect 直出，音量被忽略"
+                    else "HIGH GAIN 已关：音量可调（软件增益）"
                 }
                 "debug" -> scope.launch { app.setDebugMode(!debugMode) }
                 "descriptions" -> scope.launch { app.setShowDescriptions(!showDescriptions) }
@@ -549,7 +556,7 @@ private fun SettingItem.subtitle(): String = when (this) {
 }
 
 private fun buildRootSettings(
-    source: SourceMode, quality: AudioQuality, usbExclusive: Boolean, volume: Float,
+    source: SourceMode, quality: AudioQuality, usbExclusive: Boolean, usbHighGain: Boolean,
     scanPace: Long, haptic: Int, debug: Boolean, showDescriptions: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
     coverSize: Long, transcodeSize: Long, localCount: Int, localScanning: Boolean, localScanProgress: String,
     hasLocalFolder: Boolean
@@ -567,11 +574,16 @@ private fun buildRootSettings(
     out += SettingItem.Nav("tabs", "主界面栏目", "勾选并调整顺序", Icons.Default.List)
     out += SettingItem.Choice("quality", "播放音质", qualityName, Icons.Default.Audiotrack)
     val usbState = com.aipod.audio.UsbExclusiveAudio.currentStatus()
-    val usbQuality = if (volume >= 0.99999f) "bit-perfect 直出" else "软件音量（非 bit-perfect）"
     out += SettingItem.Toggle(
         "usbexclusive", "USB 独占输出（实验）",
-        if (usbExclusive) "已开启 · ${usbState.label} · $usbQuality" else "关闭 · 点按需接管 USB DAC",
+        if (usbExclusive) "已开启 · ${usbState.label}" else "关闭 · 点按需接管 USB DAC",
         Icons.Default.Settings
+    )
+    out += SettingItem.Toggle(
+        "usbhighgain", "HIGH GAIN（满幅直出）",
+        if (usbHighGain) "开 · 满幅 bit-perfect，忽略音量"
+        else "关 · 音量可调（独占时才有意义）",
+        Icons.Default.Audiotrack
     )
     out += SettingItem.Choice("scanpace", "扫描节奏", paceName, Icons.Default.Speed)
     out += SettingItem.Choice("haptic", "震动强度", hapticName, Icons.Default.Vibration)

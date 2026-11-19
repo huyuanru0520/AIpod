@@ -132,11 +132,17 @@ class UsbAudioSink(
      * Software gain applied to the USB PCM stream. 1.0f = strict bit-perfect
      * (PCM bytes untouched), <1.0f = integer gain applied in native layer.
      * Only used in USB-exclusive mode; the standard audio path is untouched.
-     * Mirrors [pendingVolume]: at full volume we stay bit-perfect, lowering
-     * volume opts into software gain.
+     *
+     * Gain policy is driven solely by [highGain] (an explicit user setting),
+     * NOT by volume level: HIGH GAIN on => full-scale bit-perfect (volume ignored);
+     * HIGH GAIN off => volume adjustable via integer software gain.
      */
     @Volatile
-    private var currentGain: Float = 1f
+    private var currentGain: Float = if (config.highGain) 1f else pendingVolume
+
+    /** HIGH GAIN: full-scale bit-perfect output, ignoring volume. From user setting. */
+    @Volatile
+    private var highGain: Boolean = config.highGain
 
     /** Milliseconds of silence fed to the USB pipeline on pause for responsive stop. */
     private val PAUSE_SILENCE_MS = 120
@@ -463,12 +469,12 @@ class UsbAudioSink(
     }
 
     override fun setVolume(volume: Float) {
-        pendingVolume = volume
+        pendingVolume = volume.coerceIn(0f, 1f)
         if (config.bitPerfectEnabled && usbAudioStream?.isAlive == true) {
-            // Smart compromise: full volume = strict bit-perfect (gain 1.0,
-            // native layer leaves PCM bytes untouched); lowering volume opts
-            // into integer software gain. Standard path is never affected.
-            currentGain = volume.coerceIn(0f, 1f)
+            // Gain policy depends ONLY on the explicit HIGH GAIN setting:
+            // HIGH GAIN on => 1.0 (full-scale bit-perfect, volume ignored);
+            // HIGH GAIN off => volume (adjustable integer software gain).
+            currentGain = if (highGain) 1f else pendingVolume
             usbAudioStream?.setGain(currentGain)
             muteDelegateIfNeeded()
         } else {
@@ -476,10 +482,20 @@ class UsbAudioSink(
         }
     }
 
-    /** True when USB-exclusive output is active AND running at strict
-     *  bit-perfect (volume at 100%). Exposed for the settings screen label. */
+    /** Toggle HIGH GAIN at runtime (no player rebuild). Applies immediately to
+     *  the live USB stream. HIGH GAIN on = full-scale bit-perfect (volume
+     *  ignored); off = restore volume-based software gain. */
+    fun setHighGain(on: Boolean) {
+        highGain = on
+        currentGain = if (on) 1f else pendingVolume
+        usbAudioStream?.setGain(currentGain)
+        Log.i(TAG, "setHighGain: $on -> gain=$currentGain ${if (on) "(full-scale bit-perfect)" else "(volume adjustable)"}")
+    }
+
+    /** True when USB-exclusive output is active AND HIGH GAIN is on
+     *  (full-scale bit-perfect). Exposed for the settings screen label. */
     fun isUsbBitPerfectNow(): Boolean =
-        config.bitPerfectEnabled && usbAudioStream?.isAlive == true && currentGain >= 0.99999f
+        config.bitPerfectEnabled && usbAudioStream?.isAlive == true && highGain
 
     override fun flush() {
         super.flush()
@@ -507,6 +523,16 @@ class UsbAudioSink(
 
     override fun release() {
         releaseUsbStream()
+        // 关闭独占 / 重建为标准链路时必须释放 USB 接口抢占：
+        // openDevice() 用 claimInterface(force=true) 断开了内核 snd-usb-audio 驱动，
+        // 若这里不 releaseInterface + close fd，内核驱动无法重新接管 DAC，
+        // 标准 ExoPlayer 经 AudioTrack 输出会静默无声，直到物理拔插 DAC 才恢复。
+        try {
+            usbAudioDevice.closeDevice()
+            Log.i(TAG, "release: USB interface released for kernel driver rebind")
+        } catch (e: Exception) {
+            Log.w(TAG, "release: closeDevice failed: ${e.message}")
+        }
         super.release()
     }
 
