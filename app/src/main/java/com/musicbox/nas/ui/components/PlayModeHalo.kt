@@ -29,10 +29,10 @@ import kotlinx.coroutines.delay
  * 约 1.8 秒后淡出。**只画一个红环**紧贴屏幕顶部灵动岛（居中挖孔）的外圈，
  * 不再绘制模式符号圆——之前的「两个圆」即主环 + 下方符号圆，本版已去掉符号圆。
  *
- * 定位说明：Magic8 Pro Air 屏幕 1216×2640，实测灵动岛黑色区域 x423..791、y21..133，
- * 圆心 (607,77)，左右半圆半径 56.5px。该系统 DisplayCutout 报的矩形宽 78px 是错误值
- * （实拍宽 369px），不能拿来画环，故改为按实拍标定的屏幕比例定位，跨分辨率等比缩放。
- * Canvas 铺满全屏且不吃触摸事件，可安全叠在播放页最上层。
+ * 定位说明：按圆形挖孔机型的两张真机截图标定（1280×2660 与 1024×2128，缩放 1.25 倍后
+ * 圆心/半径逐项吻合），归一化圆心 (0.498W, 0.043H)、半径 0.027W。系统 DisplayCutout
+ * 报的矩形宽 78px 错误，不可采信；早期那张药丸形截图是标注示意图，也不作为依据。
+ * 用归一化比例定位可跨分辨率贴合。Canvas 铺满全屏且不吃触摸事件，可安全叠在播放页最上层。
  */
 @Suppress("UNUSED_PARAMETER")
 @Composable
@@ -70,11 +70,14 @@ fun PlayModeHalo(
         val rectsDesc = rects?.mapIndexed { i, r ->
             "[$i]L${r.left},T${r.top},R${r.right},B${r.bottom},W${r.width()},H${r.height()}"
         }?.joinToString(" ") ?: "null"
+        val usedCx = view.width * 0.498f
+        val usedCy = view.height * 0.043f
+        val usedR = view.width * 0.027f
         CrashLogger.info(
             "HaloDiag",
             "shake#$trigger statusTop=$statusTop cutoutNull=${cutout == null} rects=$rectsDesc " +
                 "viewW=${view.width} viewH=${view.height} canvasOrigin=(${canvasOrigin.x.toInt()},${canvasOrigin.y.toInt()}) " +
-                "-> useCenter=(607,77) r=56.5 (scaled by view size)"
+                "-> useCenter=(${usedCx.toInt()},${usedCy.toInt()}) r=${usedR.toInt()} (norm 0.498W,0.043H,r=0.027W)"
         )
     }
 
@@ -86,12 +89,10 @@ fun PlayModeHalo(
             .graphicsLayer { this.alpha = alpha }
             .onGloballyPositioned { canvasOrigin = it.positionInWindow() }
     ) {
-        // Canvas 铺满窗口，size 即屏幕像素；按 1216×2640 实拍标定等比缩放。
-        val sx = size.width / 1216f
-        val sy = size.height / 2640f
-        val cx = 607f * sx
-        val cy = 77f * sy
-        val r = 56.5f * sx
+        // Canvas 铺满窗口，size 即屏幕像素；用圆孔机型标定值按归一化比例定位，跨分辨率贴合。
+        val cx = size.width * 0.498f
+        val cy = size.height * 0.043f
+        val r = size.width * 0.027f
         val stroke = 2.6.dp.toPx()
         drawCircle(
             color = BrandRed,

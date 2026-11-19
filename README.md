@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/icon.png" width="120" alt="Matrix Music" />
+<img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="120" alt="Matrix Music" />
 
 # Matrix Music
 
