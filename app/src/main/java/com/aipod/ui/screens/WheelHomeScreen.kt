@@ -142,10 +142,18 @@ internal fun WheelHome(
         loading = true
         loadError = null
         selected = 0
-        val result = runCatching {
-            if (effectiveNode is WheelNode.Search && searchQuery.isNotBlank()) {
-                data.search(searchQuery).let { list -> list.mapIndexed { i, t -> t.toWheel(i, list) } }
-            } else loadNode(effectiveNode, data)
+        val result = try {
+            Result.success(
+                if (effectiveNode is WheelNode.Search && searchQuery.isNotBlank()) {
+                    data.search(searchQuery).let { list -> list.mapIndexed { i, t -> t.toWheel(i, list) } }
+                } else loadNode(effectiveNode, data)
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // 页面切走 / 重组导致协程取消（拉全量分页时更容易被取消）：正常流程，
+            // 绝不能当成「加载失败」展示，也不要清空已有列表或改动状态。
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
         }
         result.onSuccess { items = it }.onFailure {
             items = emptyList()
