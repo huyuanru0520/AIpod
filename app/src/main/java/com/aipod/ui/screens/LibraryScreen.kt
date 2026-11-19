@@ -1637,6 +1637,13 @@ private fun LocalEmptyHint(navController: NavController) {
                 isPlaying = isPlaying,
                 onRotate = {},
                 onPlayPause = { if (isPlaying) PlayerController.pause() else PlayerController.play() },
+                // 非播放页长按播放键：直接跳到「正在播放」
+                onPlayLongPress = {
+                    navController.navigate("player") {
+                        popUpTo("library") { saveState = true }
+                        launchSingleTop = true
+                    }
+                },
                 onPrevious = { PlayerController.previous() },
                 onNext = { PlayerController.next() },
                 onRewind = {},

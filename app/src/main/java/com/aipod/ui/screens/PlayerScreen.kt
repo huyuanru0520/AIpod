@@ -245,9 +245,11 @@ fun PlayerScreen(navController: NavController) {
                 val stepMs = if (fast) 5_000L else 1_000L
                 val base = wheelSeekMs ?: PlayerController.currentPositionMs()
                 val next = (base + steps * stepMs).coerceIn(0L, duration.coerceAtLeast(0L))
+                // 滚动期间只更新本地累积值驱动进度条即时跟手，不调用 player.seekTo。
+                // 网络流（飞牛/WebDAV）每次 seek 都要丢弃缓冲+重发 Range 请求+重新解码，
+                // 逐格真 seek 会造成「转一格卡一下」。真正的 seek 延后到退出进度模式时
+                // 由 exitProgressMode() 一次性提交，全程滚动零卡顿。
                 wheelSeekMs = next
-                // 滚动过程不写盘（persist=false），退出进度模式时统一落盘一次
-                PlayerController.seekTo(next, persist = false)
             }
 
             // 退出进度模式：把最终位置落盘一次，并清除本地累积值让进度条恢复显示实时位置

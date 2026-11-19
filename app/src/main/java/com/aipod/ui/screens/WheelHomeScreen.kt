@@ -523,6 +523,13 @@ internal fun WheelHome(
                     dark = true,
                     onRotate = { steps -> moveSelection(steps) },
                     onPlayPause = { if (isPlaying) PlayerController.pause() else PlayerController.play() },
+                    // 非播放页长按播放键：直接跳到「正在播放」
+                    onPlayLongPress = {
+                        navController.navigate("player") {
+                            popUpTo("library") { saveState = true }
+                            launchSingleTop = true
+                        }
+                    },
                     // 列表界面：左右键短按上一行 / 下一行，长按由 ClickWheel 循环调用连续移动行。
                     onPrevious = { moveSelection(-1) },
                     onNext = { moveSelection(1) },

@@ -54,7 +54,7 @@ object LocalMusicScanner {
             CrashLogger.info("LocalScan", "无法解析根 documentId，扫描中止")
             return@withContext found
         }
-        walk(context, treeUri, rootId, found, onProgress, { dirsVisited++ }, { filesSeen++ })
+        walk(context, treeUri, rootId, "", found, onProgress, { dirsVisited++ }, { filesSeen++ })
         found.sortBy { "${it.folder}/${it.title}".lowercase() }
         val summary = "本地扫描完成：${found.size} 首（遍历 $dirsVisited 个目录 / 见到 $filesSeen 个文件）根=$treeUri"
         Log.i(TAG, summary)
@@ -66,6 +66,8 @@ object LocalMusicScanner {
         context: Context,
         treeUri: Uri,
         parentDocId: String,
+        /** 当前目录相对授权根的路径（用 '/' 分隔），根目录为空串。写入 Track.folder 供「按文件夹」浏览。 */
+        relPath: String,
         out: MutableList<Track>,
         onProgress: suspend (Int, String) -> Unit,
         onDir: () -> Unit = {},
@@ -111,14 +113,15 @@ object LocalMusicScanner {
                 if (docId == null) continue
                 onFile()
                 if (isDir) {
-                    walk(context, treeUri, docId, out, onProgress, onDir, onFile)
+                    val childRel = if (relPath.isEmpty()) name else "$relPath/$name"
+                    walk(context, treeUri, docId, childRel, out, onProgress, onDir, onFile)
                 } else {
                     val isAudio = mime.startsWith("audio/") || name.extensionLower() in AUDIO_EXT
                     // 逐文件判定写日志：flac/m4a 扫不到时能直接从「运行日志」看出是没遍历到还是没判定为音频
-                    CrashLogger.info("LocalScan", "文件[$name] mime=$mime 音频=$isAudio")
+                    CrashLogger.info("LocalScan", "文件[$name] mime=$mime 音频=$isAudio 目录=$relPath")
                     if (isAudio) {
                         val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
-                        val track = toTrack(context, uri, name, out.size)
+                        val track = toTrack(context, uri, name, out.size, relPath)
                         if (track != null) {
                             out.add(track)
                             onProgress(out.size, name)
@@ -129,7 +132,7 @@ object LocalMusicScanner {
         }
     }
 
-    private fun toTrack(context: Context, uri: Uri, displayName: String, index: Int): Track? {
+    private fun toTrack(context: Context, uri: Uri, displayName: String, index: Int, folder: String): Track? {
         val retr = android.media.MediaMetadataRetriever()
         var title = displayName.substringBeforeLast('.')
         var artist = ""
@@ -167,7 +170,7 @@ object LocalMusicScanner {
             streamUrl = url,
             source = SourceType.LOCAL,
             embeddedAudioUrl = url,
-            folder = "",
+            folder = folder,
             sampleRateHz = sampleRate,
             bitDepth = bitDepth,
             codec = codec

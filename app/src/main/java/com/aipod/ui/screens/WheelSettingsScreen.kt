@@ -508,6 +508,13 @@ fun WheelSettingsScreen(navController: NavController) {
                         if (items.isNotEmpty()) selected = (selected + steps).coerceIn(0, items.lastIndex)
                     },
                     onPlayPause = { if (isPlaying) PlayerController.pause() else PlayerController.play() },
+                    // 非播放页长按播放键：直接跳到「正在播放」
+                    onPlayLongPress = {
+                        navController.navigate("player") {
+                            popUpTo("library") { saveState = true }
+                            launchSingleTop = true
+                        }
+                    },
                     onPrevious = { if (node == SettingsNode.Tabs) moveTab(-1) else PlayerController.previous() },
                     onNext = { if (node == SettingsNode.Tabs) moveTab(1) else PlayerController.next() },
                     onRewind = { PlayerController.seekTo((PlayerController.currentPositionMs() - 5_000L).coerceAtLeast(0)) },
