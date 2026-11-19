@@ -331,6 +331,13 @@ fun WheelSettingsScreen(navController: NavController) {
                         statusLine = lines.joinToString(" · ").take(80)
                     }
                 }
+                "usbaudio" -> {
+                    statusLine = "正在检测 USB DAC / bit-perfect 能力…"
+                    scope.launch {
+                        val report = com.aipod.audio.UsbAudioDiagnostics.diagnoseAndLog(context)
+                        statusLine = report.summary.take(90)
+                    }
+                }
                 "export" -> exportLauncher.launch("AIpod_settings.json")
                 "import" -> importLauncher.launch(arrayOf("application/json", "*/*"))
                 "clearcover" -> {
@@ -557,6 +564,7 @@ private fun buildRootSettings(
     out += SettingItem.Action("scan", "立即扫描 WebDAV", if (scanning) "扫描中…" else "扫描音乐库", Icons.Default.Storage)
     out += SettingItem.Action("test", "测试连接 / 诊断", "WebDAV 连接自检", Icons.Default.Link)
     out += SettingItem.Action("probe", "检测飞牛新接口", "风格 / 文件夹 / 漫游", Icons.Default.Storage)
+    out += SettingItem.Action("usbaudio", "USB DAC / 无损输出检测", "检测 DAC 与 bit-perfect 支持", Icons.Default.Audiotrack)
     out += SettingItem.Toggle("debug", "调试模式", if (debug) "已开启" else "已关闭", Icons.Default.BugReport)
     out += SettingItem.Toggle("descriptions", "说明文字", if (showDescriptions) "显示" else "已隐藏", Icons.Default.Description)
     out += SettingItem.Nav("logs", "运行日志", "查看 / 复制 / 另存", Icons.Default.Description)

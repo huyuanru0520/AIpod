@@ -29,8 +29,8 @@ android {
         applicationId = "com.aipod"
         minSdk = 21
         targetSdk = 34
-        versionCode = 100
-        versionName = "4.1.3"
+        versionCode = 101
+        versionName = "4.1.4"
     }
 
     signingConfigs {
