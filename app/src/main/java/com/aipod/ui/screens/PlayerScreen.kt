@@ -230,6 +230,13 @@ fun PlayerScreen(navController: NavController) {
                 PlayerController.seekTo(next, persist = true)
             }
 
+            // 播放队列（MENU 打开）逐行移动选中项：与主页列表滚轮行为一致，
+            // 左右键短按一行、长按连续移动（震动由 ClickWheel.hapticOnLongRepeat 负责）。
+            fun moveQueueSelection(steps: Int) {
+                selectedQueueIndex =
+                    (selectedQueueIndex + steps).coerceIn(0, queue.lastIndex.coerceAtLeast(0))
+            }
+
             // 滚轮调进度：基于本地累积值 wheelSeekMs 逐格推进，不读播放器异步位置。
             // 慢转（间隔 ≥ 100ms）精确到 1 秒/格；快速滑动（间隔 < 100ms）自动放大步长快进。
             // 关键是快速连续事件都在上一格基础上累加，进度条即时跟手、不回跳、不卡顿。
@@ -365,10 +372,7 @@ fun PlayerScreen(navController: NavController) {
                         centerActive = progressMode,
                         onRotate = { steps ->
                             when {
-                                menuOpen -> {
-                                    selectedQueueIndex =
-                                        (selectedQueueIndex + steps).coerceIn(0, queue.lastIndex.coerceAtLeast(0))
-                                }
+                                menuOpen -> moveQueueSelection(steps)
                                 progressMode -> {
                                     // 进度模式优先：封面 / 歌词界面按了中心键进进度模式后，
                                     // 滚轮一律调歌曲进度，而不是继续滚歌词（需求2）。
@@ -389,10 +393,12 @@ fun PlayerScreen(navController: NavController) {
                         onPlayPause = { if (isPlaying) PlayerController.pause() else PlayerController.play() },
                         // 长按播放键：进入歌曲详情（metadata + 收藏）
                         onPlayLongPress = { if (current != null) navController.navigate("songdetail") },
-                        onPrevious = { if (progressMode) seekBy(-5_000L) else PlayerController.previous() },
-                        onNext = { if (progressMode) seekBy(5_000L) else PlayerController.next() },
-                        onRewind = { seekBy(-5_000L) },
-                        onForward = { seekBy(5_000L) },
+                        // 队列界面（menuOpen）：左右键与主页列表一致——短按上一行/下一行，
+                        // 长按连续逐行移动；非队列界面保持原切歌/快进快退行为。
+                        onPrevious = { if (menuOpen) moveQueueSelection(-1) else if (progressMode) seekBy(-5_000L) else PlayerController.previous() },
+                        onNext = { if (menuOpen) moveQueueSelection(1) else if (progressMode) seekBy(5_000L) else PlayerController.next() },
+                        onRewind = { if (menuOpen) moveQueueSelection(-1) else seekBy(-5_000L) },
+                        onForward = { if (menuOpen) moveQueueSelection(1) else seekBy(5_000L) },
                         onMenu = { menuOpen = !menuOpen; if (!menuOpen) exitProgressMode() },
                         onMenuHome = { menuOpen = false; exitProgressMode(); navController.popBackStack("library", false) },
                         onConfirm = {
@@ -420,6 +426,8 @@ fun PlayerScreen(navController: NavController) {
                             showLyrics = !showLyrics
                             exitProgressMode()
                         },
+                        // 队列界面长按逐行移动时每行震动，与主页列表一致
+                        hapticOnLongRepeat = menuOpen,
                         // 略微上移，避免整块压在屏幕底部
                         modifier = Modifier
                             .align(Alignment.CenterHorizontally)
