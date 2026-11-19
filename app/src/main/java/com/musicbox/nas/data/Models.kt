@@ -7,6 +7,14 @@ import androidx.media3.common.MediaMetadata
 enum class SourceType { WEBDAV, FNOS, M3U, LOCAL }
 
 /**
+ * 播放模式（三态，摇一摇循环切换）：
+ * - SHUFFLE 随机播放：shuffle 开 + 列表循环；
+ * - LIST 列表循环：shuffle 关 + 列表循环；
+ * - ONE 单曲循环：shuffle 关 + 单曲循环。
+ */
+enum class PlayMode { SHUFFLE, LIST, ONE }
+
+/**
  * 播放状态快照：冷启动恢复用（队列 + 当前索引 + 播放位置 + 是否正在播放）。
  * 队列用 Track 的 JSON 落盘，见 MusicBoxApp.encodeTracks/decodeTracks。
  */

@@ -58,6 +58,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -92,6 +93,7 @@ import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -109,10 +111,13 @@ import com.musicbox.nas.ui.components.BareCover
 import com.musicbox.nas.ui.components.ClickWheel
 import com.musicbox.nas.ui.components.CoverImage
 import com.musicbox.nas.ui.components.HiResBadge
+import com.musicbox.nas.ui.components.PlayModeHalo
 import com.musicbox.nas.ui.components.fadeInList
 import com.musicbox.nas.ui.components.glassHighlight
 import com.musicbox.nas.ui.components.rememberCoverBitmap
 import com.musicbox.nas.ui.theme.BrandRed
+import com.musicbox.nas.util.Haptics
+import com.musicbox.nas.util.ShakeDetector
 import com.musicbox.nas.util.formatDuration
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.filterNotNull
@@ -142,11 +147,23 @@ fun PlayerScreen(navController: NavController) {
     val duration by PlayerController.duration.collectAsState()
     val repeatMode by PlayerController.repeatMode.collectAsState()
     val shuffle by PlayerController.shuffle.collectAsState()
+    val playMode by PlayerController.playMode.collectAsState()
     val playError by PlayerController.error.collectAsState()
     val current = if (idx in queue.indices) queue[idx] else null
 
     var showQueue by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val shakeContext = LocalContext.current
+    val shakeView = LocalView.current
+    // 摇一摇切换播放模式（随机 / 列表循环 / 单曲循环）：仅在播放页可见时监听。
+    DisposableEffect(Unit) {
+        val detector = ShakeDetector(shakeContext) {
+            PlayerController.cyclePlayMode()
+            Haptics.click(shakeContext, shakeView)
+        }
+        if (detector.isAvailable()) detector.start()
+        onDispose { detector.stop() }
+    }
     val volume by MusicBoxApp.instance.volume.collectAsState()
     var volumeActive by remember { mutableStateOf(false) }   // 滚轮调音量时，进度条就地变音量条
     var menuOpen by remember { mutableStateOf(false) }      // MENU：本页队列列表
@@ -186,6 +203,9 @@ fun PlayerScreen(navController: NavController) {
     Box(Modifier.fillMaxSize()) {
         // 竖屏背景与横屏一致：模糊当前封面 + 主色调 + 暗化渐变
         CoverBackdrop(current)
+        // 摄像头挖孔区的播放模式环：环绕摄像头旋转，标注 随机/列表循环/单曲循环。
+        // 放在最外层、铺满全屏，才能覆盖到状态栏挖孔位置；不消费触摸事件。
+        PlayModeHalo(mode = playMode, modifier = Modifier.fillMaxSize())
         // 播放页保留状态栏（见 MainActivity.keepStatusBarVisible）：内容从状态栏下方开始，
         // 但背景仍在 Box 里铺满整屏，状态栏透出的是封面模糊图而不是黑条。
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {

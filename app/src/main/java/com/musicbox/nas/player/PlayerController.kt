@@ -15,6 +15,7 @@ import androidx.media3.session.SessionToken
 import com.musicbox.nas.AudioQuality
 import com.musicbox.nas.MusicBoxApp
 import com.musicbox.nas.data.PlaybackSnapshot
+import com.musicbox.nas.data.PlayMode
 import com.musicbox.nas.data.SourceType
 import com.musicbox.nas.data.Track
 import com.musicbox.nas.data.rebasedTo
@@ -91,6 +92,10 @@ object PlayerController {
 
     private val _shuffle = MutableStateFlow(false)
     val shuffle = _shuffle.asStateFlow()
+
+    /** 统一播放模式（三态）：随机 / 列表循环 / 单曲循环。摇一摇与摄像头环动画都读它。 */
+    private val _playMode = MutableStateFlow(PlayMode.LIST)
+    val playMode = _playMode.asStateFlow()
 
     /** 最近一次播放错误（错误码 + 描述），UI 直接展示，便于定位。 */
     private val _error = MutableStateFlow<String?>(null)
@@ -211,13 +216,23 @@ object PlayerController {
                     CrashLogger.info("PlayerError", msg)
                 }
 
-                override fun onRepeatModeChanged(mode: Int) { _repeatMode.value = mode }
-                override fun onShuffleModeEnabledChanged(enabled: Boolean) { _shuffle.value = enabled }
+                override fun onRepeatModeChanged(mode: Int) {
+                    _repeatMode.value = mode
+                    syncPlayMode()
+                }
+                override fun onShuffleModeEnabledChanged(enabled: Boolean) {
+                    _shuffle.value = enabled
+                    syncPlayMode()
+                }
             })
         }.onFailure { CrashLogger.error("PlayerController.listener", it) }
 
         // 转轮调出来的音量要在播放器重建后仍然生效
         runCatching { p.volume = MusicBoxApp.instance.volume.value.coerceIn(0f, 1f) }
+        // 与底层 ExoPlayer 对齐 shuffle/repeat 及统一播放模式（listener 回调未必在这里之前触发）
+        _shuffle.value = p.shuffleModeEnabled
+        _repeatMode.value = p.repeatMode
+        syncPlayMode()
         _connected.value = true
         startPolling()
         CrashLogger.info("PlayerController", "已绑定 ExoPlayer")
@@ -512,6 +527,47 @@ object PlayerController {
     fun toggleShuffle() {
         runCatching { player?.let { it.shuffleModeEnabled = !it.shuffleModeEnabled } }
             .onFailure { logCtrl("toggleShuffle", it) }
+    }
+
+    /** 由底层 ExoPlayer 的 shuffle / repeat 状态反推统一播放模式。 */
+    private fun syncPlayMode() {
+        _playMode.value = when {
+            _shuffle.value -> PlayMode.SHUFFLE
+            _repeatMode.value == Player.REPEAT_MODE_ONE -> PlayMode.ONE
+            else -> PlayMode.LIST
+        }
+    }
+
+    /** 应用播放模式到底层 ExoPlayer：随机=洗牌+列表循环，列表=列表循环，单曲=单曲循环。 */
+    fun setPlayMode(mode: PlayMode) {
+        val p = player
+        if (p == null) {
+            // 播放器尚未连接：先更新 StateFlow，attach 后再由 listener 对齐
+            _shuffle.value = mode == PlayMode.SHUFFLE
+            _repeatMode.value = if (mode == PlayMode.ONE) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_ALL
+            _playMode.value = mode
+            return
+        }
+        runCatching {
+            p.shuffleModeEnabled = mode == PlayMode.SHUFFLE
+            p.repeatMode = if (mode == PlayMode.ONE) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_ALL
+        }.onFailure { logCtrl("setPlayMode", it) }
+        // listener 回调会同步 _shuffle/_repeatMode，这里直接置权威值，避免 UI 等下一帧
+        _shuffle.value = mode == PlayMode.SHUFFLE
+        _repeatMode.value = if (mode == PlayMode.ONE) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_ALL
+        _playMode.value = mode
+        CrashLogger.info("PlayMode", "切换播放模式 → ${mode.name}")
+    }
+
+    /** 摇一摇：按 随机 → 列表循环 → 单曲循环 → 随机 循环切换。返回切换后的模式。 */
+    fun cyclePlayMode(): PlayMode {
+        val next = when (_playMode.value) {
+            PlayMode.SHUFFLE -> PlayMode.LIST
+            PlayMode.LIST -> PlayMode.ONE
+            PlayMode.ONE -> PlayMode.SHUFFLE
+        }
+        setPlayMode(next)
+        return next
     }
 
     fun stop() {
