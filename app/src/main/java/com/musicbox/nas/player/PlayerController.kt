@@ -97,6 +97,10 @@ object PlayerController {
     private val _playMode = MutableStateFlow(PlayMode.LIST)
     val playMode = _playMode.asStateFlow()
 
+    /** 播放模式切换事件计数：每次主动切换 +1，摄像头环据此短暂浮现后隐藏。 */
+    private val _playModeEvent = MutableStateFlow(0L)
+    val playModeEvent = _playModeEvent.asStateFlow()
+
     /** 最近一次播放错误（错误码 + 描述），UI 直接展示，便于定位。 */
     private val _error = MutableStateFlow<String?>(null)
 
@@ -567,6 +571,7 @@ object PlayerController {
             PlayMode.ONE -> PlayMode.SHUFFLE
         }
         setPlayMode(next)
+        _playModeEvent.value += 1
         return next
     }
 

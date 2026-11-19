@@ -148,6 +148,7 @@ fun PlayerScreen(navController: NavController) {
     val repeatMode by PlayerController.repeatMode.collectAsState()
     val shuffle by PlayerController.shuffle.collectAsState()
     val playMode by PlayerController.playMode.collectAsState()
+    val playModeEvent by PlayerController.playModeEvent.collectAsState()
     val playError by PlayerController.error.collectAsState()
     val current = if (idx in queue.indices) queue[idx] else null
 
@@ -203,9 +204,9 @@ fun PlayerScreen(navController: NavController) {
     Box(Modifier.fillMaxSize()) {
         // 竖屏背景与横屏一致：模糊当前封面 + 主色调 + 暗化渐变
         CoverBackdrop(current)
-        // 摄像头挖孔区的播放模式环：环绕摄像头旋转，标注 随机/列表循环/单曲循环。
+        // 摄像头挖孔区的播放模式环：紧贴摄像头外圈，平时隐藏，摇一摇切换模式时短暂浮现。
         // 放在最外层、铺满全屏，才能覆盖到状态栏挖孔位置；不消费触摸事件。
-        PlayModeHalo(mode = playMode, modifier = Modifier.fillMaxSize())
+        PlayModeHalo(mode = playMode, trigger = playModeEvent, modifier = Modifier.fillMaxSize())
         // 播放页保留状态栏（见 MainActivity.keepStatusBarVisible）：内容从状态栏下方开始，
         // 但背景仍在 Box 里铺满整屏，状态栏透出的是封面模糊图而不是黑条。
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {
