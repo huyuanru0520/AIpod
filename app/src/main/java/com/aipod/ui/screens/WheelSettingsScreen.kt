@@ -117,6 +117,7 @@ fun WheelSettingsScreen(navController: NavController) {
     // 所有设置状态
     val sourceMode by app.sourceMode.collectAsState()
     val audioQuality by app.audioQuality.collectAsState()
+    val currentVolume by app.volume.collectAsState()
     val usbExclusive by app.usbExclusive.collectAsState()
     val scanPace by app.scanPaceMs.collectAsState()
     val visibleTabs by app.visibleTabs.collectAsState()
@@ -234,7 +235,7 @@ fun WheelSettingsScreen(navController: NavController) {
     // 构建当前页条目
     val items: List<SettingItem> = when (node) {
         SettingsNode.Root ->         buildRootSettings(
-            sourceMode, audioQuality, usbExclusive, scanPace, hapticStrength, debugMode, showDescriptions,
+            sourceMode, audioQuality, usbExclusive, currentVolume, scanPace, hapticStrength, debugMode, showDescriptions,
             webDav, fnos, webDavScanning, coverCacheSize, transcodeSize, localCount, localScanning, localScanProgress,
             !localFolderUri.isNullOrBlank()
         )
@@ -548,7 +549,7 @@ private fun SettingItem.subtitle(): String = when (this) {
 }
 
 private fun buildRootSettings(
-    source: SourceMode, quality: AudioQuality, usbExclusive: Boolean,
+    source: SourceMode, quality: AudioQuality, usbExclusive: Boolean, volume: Float,
     scanPace: Long, haptic: Int, debug: Boolean, showDescriptions: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
     coverSize: Long, transcodeSize: Long, localCount: Int, localScanning: Boolean, localScanProgress: String,
     hasLocalFolder: Boolean
@@ -566,9 +567,10 @@ private fun buildRootSettings(
     out += SettingItem.Nav("tabs", "主界面栏目", "勾选并调整顺序", Icons.Default.List)
     out += SettingItem.Choice("quality", "播放音质", qualityName, Icons.Default.Audiotrack)
     val usbState = com.aipod.audio.UsbExclusiveAudio.currentStatus()
+    val usbQuality = if (volume >= 0.99999f) "bit-perfect 直出" else "软件音量（非 bit-perfect）"
     out += SettingItem.Toggle(
         "usbexclusive", "USB 独占输出（实验）",
-        if (usbExclusive) "已开启 · ${usbState.label}" else "关闭 · 点按需接管 USB DAC",
+        if (usbExclusive) "已开启 · ${usbState.label} · $usbQuality" else "关闭 · 点按需接管 USB DAC",
         Icons.Default.Settings
     )
     out += SettingItem.Choice("scanpace", "扫描节奏", paceName, Icons.Default.Speed)

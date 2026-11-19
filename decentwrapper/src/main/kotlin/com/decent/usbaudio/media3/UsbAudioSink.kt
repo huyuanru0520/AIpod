@@ -127,6 +127,19 @@ class UsbAudioSink(
     private var currentChannelCount: Int = 0
     private var pendingVolume: Float = 1f
     private var delegateMuted: Boolean = false
+
+    /**
+     * Software gain applied to the USB PCM stream. 1.0f = strict bit-perfect
+     * (PCM bytes untouched), <1.0f = integer gain applied in native layer.
+     * Only used in USB-exclusive mode; the standard audio path is untouched.
+     * Mirrors [pendingVolume]: at full volume we stay bit-perfect, lowering
+     * volume opts into software gain.
+     */
+    @Volatile
+    private var currentGain: Float = 1f
+
+    /** Milliseconds of silence fed to the USB pipeline on pause for responsive stop. */
+    private val PAUSE_SILENCE_MS = 120
     private var handleBufferCallCount: Long = 0
 
     /**
@@ -443,17 +456,30 @@ class UsbAudioSink(
         isPlaying = false
         if (!engineNeedsInitialSeek) nativeEngine?.pause()
         usbStreamingThread?.pauseStreaming()
+        // Blank in-flight URBs + feed silence so pause is immediate instead of
+        // letting the ~80ms USB pipeline keep playing buffered audio.
+        usbAudioStream?.writeSilence(PAUSE_SILENCE_MS)
         super.pause()
     }
 
     override fun setVolume(volume: Float) {
         pendingVolume = volume
         if (config.bitPerfectEnabled && usbAudioStream?.isAlive == true) {
+            // Smart compromise: full volume = strict bit-perfect (gain 1.0,
+            // native layer leaves PCM bytes untouched); lowering volume opts
+            // into integer software gain. Standard path is never affected.
+            currentGain = volume.coerceIn(0f, 1f)
+            usbAudioStream?.setGain(currentGain)
             muteDelegateIfNeeded()
         } else {
             unmuteDelegateIfNeeded()
         }
     }
+
+    /** True when USB-exclusive output is active AND running at strict
+     *  bit-perfect (volume at 100%). Exposed for the settings screen label. */
+    fun isUsbBitPerfectNow(): Boolean =
+        config.bitPerfectEnabled && usbAudioStream?.isAlive == true && currentGain >= 0.99999f
 
     override fun flush() {
         super.flush()
@@ -597,6 +623,9 @@ class UsbAudioSink(
         usbAudioStream = stream
         currentSampleRate = sampleRate
         currentChannelCount = channelCount
+        // Restore the current gain after stream (re)creation so a volume change
+        // made before a rate switch / DAC replug keeps applying.
+        stream.setGain(currentGain)
         muteDelegateIfNeeded()
 
         // Try to create engine now (works for first track where onMediaItemTransition

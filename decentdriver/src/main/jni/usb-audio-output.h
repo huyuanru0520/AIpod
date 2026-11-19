@@ -76,6 +76,10 @@ struct UsbAudioContext {
 
     std::atomic<bool> running;
 
+    /** Software gain for adjustable volume in USB-exclusive mode.
+     *  1.0f = strict bit-perfect (PCM bytes untouched). <1.0f = integer gain applied. */
+    std::atomic<float> gain;
+
     /** Scratch buffer for PCM format conversion (float -> int16/24/32). */
     uint8_t *transferBuffer;
     int32_t transferBufferCapacity;

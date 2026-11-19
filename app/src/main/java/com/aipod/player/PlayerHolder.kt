@@ -258,4 +258,15 @@ object PlayerHolder {
     }
 
     fun get(): ExoPlayer? = player
+
+    /**
+     * USB 独占链路当前的音质状态，供设置页标注：
+     * - null：当前不是 USB 独占链路
+     * - true：USB 独占且音量 100%（严格 bit-perfect）
+     * - false：USB 独占但音量被调低（软件增益，非 bit-perfect）
+     */
+    fun usbBitPerfectNow(): Boolean? {
+        if (activeOutput != "USB 独占") return null
+        return runCatching { usbSink?.isUsbBitPerfectNow() == true }.getOrNull()
+    }
 }

@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <new>
 #include <unistd.h>
 #include <time.h>
@@ -36,6 +37,47 @@
 // ── Float → PCM conversion ──────────────────────────────────────────
 
 static inline float clampf(float v) { return v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v); }
+
+// ── Software gain (adjustable volume in USB-exclusive mode) ─────────
+// Applies an integer gain to already-bit-depth-converted PCM, in place.
+// NOTE: only called when gain < 1.0f; at 1.0f the PCM bytes are left
+// completely untouched so the strict bit-perfect path is bit-identical.
+// fmtTag: 1 = int16 LE, 2 = packed int24 LE, 3 = int32 LE (24-in-32).
+static void applyGainInt16(uint8_t *data, int numSamples, float gain) {
+    auto *s = reinterpret_cast<int16_t *>(data);
+    for (int i = 0; i < numSamples; i++) {
+        double v = (double)s[i] * gain;
+        if (v > 32767.0) v = 32767.0; else if (v < -32768.0) v = -32768.0;
+        s[i] = (int16_t)v;
+    }
+}
+static void applyGainInt24(uint8_t *data, int numSamples, float gain) {
+    for (int i = 0; i < numSamples; i++) {
+        int idx = i * 3;
+        int32_t v = (int32_t)((uint32_t)data[idx] | ((uint32_t)data[idx+1] << 8) | ((uint32_t)data[idx+2] << 16));
+        if (v & 0x800000) v |= 0xFF000000;  // sign extend 24 -> 32
+        double g = (double)v * gain;
+        if (g > 8388607.0) g = 8388607.0; else if (g < -8388608.0) g = -8388608.0;
+        int32_t o = (int32_t)g;
+        data[idx]   = (uint8_t)(o & 0xFF);
+        data[idx+1] = (uint8_t)((o >> 8) & 0xFF);
+        data[idx+2] = (uint8_t)((o >> 16) & 0xFF);
+    }
+}
+static void applyGainInt32(uint8_t *data, int numSamples, float gain) {
+    auto *s = reinterpret_cast<int32_t *>(data);
+    for (int i = 0; i < numSamples; i++) {
+        double v = (double)s[i] * gain;
+        if (v > 2147483647.0) v = 2147483647.0;
+        else if (v < -2147483648.0) v = -2147483648.0;
+        s[i] = (int32_t)v;
+    }
+}
+
+/** Mutex protecting the URB ring state (submitIdx/reapIdx/inflight), because
+ *  submitPcmToUrbs can now be called from the decode thread, the streaming
+ *  thread, AND the pause-silence writer concurrently. */
+static std::mutex g_submitMutex;
 
 // Bit-perfect float→int conversion matching FFmpeg's libswresample normalization.
 // FFmpeg normalizes: int / 2^N (e.g., int16 / 32768.0).
@@ -414,6 +456,7 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioCreate(
     ctx->bytesPerFrame = (bits / 8) * ch;
     ctx->maxPacketSize = maxPkt;
     ctx->running.store(false);
+    ctx->gain.store(1.0f);  // default: strict bit-perfect
     ctx->transferBuffer = nullptr;
     ctx->transferBufferCapacity = 0;
     ctx->framesWritten = 0;
@@ -683,9 +726,36 @@ void padInt24ToInt32(const uint8_t *src, uint8_t *dst, int numSamples) {
  * Used by both nativeUsbAudioWrite (float path) and nativeUsbAudioWriteRaw.
  */
 void submitPcmToUrbs(UsbAudioContext *ctx, const uint8_t *pcmData, int totalBytes) {
+    // Serialize ring-buffer state: decode thread / streaming thread / silence
+    // writer can call this concurrently.
+    std::lock_guard<std::mutex> ringLock(g_submitMutex);
+
+    // Apply software gain to the incoming PCM BEFORE residual merge. residual
+    // holds already-gained bytes from a previous call, so merging first and
+    // gaining afterward would scale the residual twice.
+    // At gain==1.0f we skip entirely and pass the original pointer through —
+    // strict bit-perfect path stays byte-for-byte identical.
+    uint8_t *gainedBuf = nullptr;
+    const uint8_t *inData = pcmData;
+    const float gain = ctx->gain.load();
+    if (totalBytes > 0 && gain < 0.99999f) {
+        gainedBuf = (uint8_t *)malloc(totalBytes);
+        if (gainedBuf) {
+            memcpy(gainedBuf, pcmData, totalBytes);
+            int numSamples;
+            switch (ctx->bitDepth) {
+                case 16: numSamples = totalBytes / 2; applyGainInt16(gainedBuf, numSamples, gain); break;
+                case 24: numSamples = totalBytes / 3; applyGainInt24(gainedBuf, numSamples, gain); break;
+                case 32: numSamples = totalBytes / 4; applyGainInt32(gainedBuf, numSamples, gain); break;
+                default: numSamples = 0; break;
+            }
+            inData = gainedBuf;
+        }
+    }
+
     // Prepend any residual bytes from the previous call to avoid
     // micro-discontinuities (pops) at buffer boundaries.
-    const uint8_t *data = pcmData;
+    const uint8_t *data = inData;
     int dataLen = totalBytes;
     uint8_t *mergedBuf = nullptr;
 
@@ -694,7 +764,7 @@ void submitPcmToUrbs(UsbAudioContext *ctx, const uint8_t *pcmData, int totalByte
         mergedBuf = (uint8_t *)malloc(dataLen);
         if (mergedBuf) {
             memcpy(mergedBuf, ctx->residualBuffer, ctx->residualBytes);
-            memcpy(mergedBuf + ctx->residualBytes, pcmData, totalBytes);
+            memcpy(mergedBuf + ctx->residualBytes, inData, totalBytes);
             data = mergedBuf;
         }
         ctx->residualBytes = 0;
@@ -781,6 +851,7 @@ void submitPcmToUrbs(UsbAudioContext *ctx, const uint8_t *pcmData, int totalByte
     }
 
     free(mergedBuf);
+    free(gainedBuf);
 }
 
 // ── Raw bytes write (no float, for libFLAC integer path) ────────────
@@ -840,6 +911,60 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioWriteRaw(
              (long long)ctx->framesWritten, (double)ctx->framesWritten/ctx->sampleRate,
              ctx->urbsInFlight, inputBitDepth, ctx->calibratedFpmf, (long long)g_feedbackCount);
     }
+}
+
+/** Set software gain applied in submitPcmToUrbs. 1.0f = strict bit-perfect.
+ *  Called from UsbAudioSink.setVolume(). */
+JNIEXPORT void JNICALL
+Java_com_decent_usbaudio_UsbAudioStream_nativeSetGain(
+        JNIEnv *, jobject, jlong h, jfloat gain) {
+    auto *ctx = reinterpret_cast<UsbAudioContext *>(h);
+    if (!ctx) return;
+    if (gain < 0.0f) gain = 0.0f;
+    if (gain > 1.0f) gain = 1.0f;
+    ctx->gain.store(gain);
+    LOGI("SetGain: %.3f (%s)", gain, gain >= 0.99999f ? "bit-perfect" : "software volume");
+}
+
+/** Immediately silence a running stream (for responsive pause).
+ *  1) Zero every pre-allocated URB data buffer (all-zero = digital silence
+ *     for any bit depth), so in-flight URBs go silent at once.
+ *  2) Clear the residual buffer (stale gained bytes from a previous call).
+ *  3) Feed `durationMs` of silence through the normal pipeline so the DAC
+ *     keeps receiving valid frames and does not underrun while paused.
+ *  Does NOT advance framesWritten — playback position stays put. */
+JNIEXPORT void JNICALL
+Java_com_decent_usbaudio_UsbAudioStream_nativeWriteSilence(
+        JNIEnv *, jobject, jlong h, jint durationMs) {
+    auto *ctx = reinterpret_cast<UsbAudioContext *>(h);
+    if (!ctx || !ctx->running.load()) return;
+
+    // Step 1+2: blank in-flight URB payloads and residual, under the ring lock.
+    {
+        std::lock_guard<std::mutex> lock(g_submitMutex);
+        for (int i = 0; i < USB_AUDIO_NUM_URBS; i++) {
+            if (ctx->ring[i].buffer) {
+                memset(ctx->ring[i].buffer, 0, USB_AUDIO_URB_BUFFER_SIZE);
+            }
+        }
+        memset(ctx->residualBuffer, 0, sizeof(ctx->residualBuffer));
+        ctx->residualBytes = 0;
+    }
+
+    // Step 3: feed silence to keep the pipeline valid (no underrun/pop).
+    int frames = (int)((int64_t)ctx->sampleRate * durationMs / 1000);
+    if (frames <= 0 || ctx->bytesPerFrame <= 0) return;
+    const int CHUNK_FRAMES = 256;
+    uint8_t silenceBuf[CHUNK_FRAMES * 8];  // max 8 bytes/frame (32-bit stereo)
+    memset(silenceBuf, 0, sizeof(silenceBuf));
+    int chunkBytes = CHUNK_FRAMES * ctx->bytesPerFrame;
+    int framesLeft = frames;
+    while (framesLeft > 0 && ctx->running.load()) {
+        int f = framesLeft < CHUNK_FRAMES ? framesLeft : CHUNK_FRAMES;
+        submitPcmToUrbs(ctx, silenceBuf, f * ctx->bytesPerFrame);
+        framesLeft -= f;
+    }
+    LOGI("WriteSilence: %dms (~%d frames) — in-flight URBs blanked", durationMs, frames);
 }
 
 } // extern "C"

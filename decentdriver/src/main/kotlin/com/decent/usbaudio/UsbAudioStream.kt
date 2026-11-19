@@ -142,6 +142,28 @@ class UsbAudioStream(
     }
 
     /**
+     * Set software gain applied to PCM written to this stream.
+     * 1.0f = strict bit-perfect (PCM untouched); <1.0f = integer gain applied.
+     * Only takes effect while bit-perfect USB output is active; the standard
+     * (non-USB) audio path is completely unaffected.
+     */
+    fun setGain(gain: Float) {
+        if (nativeHandle == 0L) return
+        nativeSetGain(nativeHandle, gain.coerceIn(0f, 1f))
+    }
+
+    /**
+     * Immediately silence the stream (for responsive pause).
+     * Blanks all in-flight URB buffers and feeds `durationMs` of silence so
+     * pause takes effect at once instead of letting the ~80ms USB pipeline
+     * drain. Does not advance the playback position.
+     */
+    fun writeSilence(durationMs: Int) {
+        if (nativeHandle == 0L) return
+        nativeWriteSilence(nativeHandle, durationMs)
+    }
+
+    /**
      * Stop accepting new writes. Does NOT drain the pipeline.
      * Call [drainUrbs] after this to wait for all in-flight URBs to complete.
      */
@@ -196,6 +218,8 @@ class UsbAudioStream(
     private external fun nativeUsbAudioStart(handle: Long): Boolean
     private external fun nativeUsbAudioWrite(handle: Long, pcmBuffer: FloatArray)
     private external fun nativeUsbAudioWriteRaw(handle: Long, pcmBuffer: ByteArray, inputBitDepth: Int)
+    private external fun nativeSetGain(handle: Long, gain: Float)
+    private external fun nativeWriteSilence(handle: Long, durationMs: Int)
     private external fun nativeUsbAudioStop(handle: Long)
     private external fun nativeFlush(handle: Long)
     private external fun nativeDrainUrbs(handle: Long): Int
