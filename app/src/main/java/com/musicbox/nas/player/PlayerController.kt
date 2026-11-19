@@ -346,6 +346,30 @@ object PlayerController {
     }
 
     /**
+     * 从任意列表点击一首歌的统一入口。
+     *
+     * 若点击的正是当前正在播放的曲目（同 id + 同音源），**不重建队列、不 seek**，
+     * 保持当前进度继续播放（暂停态则恢复播放），仅返回 true 让调用方进入播放页。
+     * 这样避免「点正在播放的歌却从头开始」。其余情况按普通播放处理。
+     *
+     * @return true=点击的是当前曲目（已保持进度，调用方只需进入播放页）；false=普通起播。
+     */
+    fun playFromList(tracks: List<Track>, index: Int): Boolean {
+        if (tracks.isEmpty()) return false
+        val i = index.coerceIn(0, tracks.lastIndex)
+        val target = tracks[i]
+        val cur = current
+        if (cur != null && cur.id == target.id && cur.source == target.source) {
+            CrashLogger.info("Play", "点击列表中的当前曲目「${target.title}」，保持进度继续播放，不从头")
+            // 暂停态下恢复播放；已播放时 play() 无副作用。进度保持不变。
+            if (!_isPlaying.value) play()
+            return true
+        }
+        playTracks(tracks, i)
+        return false
+    }
+
+    /**
      * 替换队列并从指定位置开始播放；直接作用于 ExoPlayer，同步生效。
      *
      * @param startPositionMs 起始播放进度（冷启动恢复用，普通播放为 0）。

@@ -347,8 +347,8 @@ fun PlayerScreen(navController: NavController) {
                         onConfirm = {
                             when {
                                 menuOpen -> {
-                                    queue.getOrNull(selectedQueueIndex)?.let { t ->
-                                        PlayerController.playTracks(queue, selectedQueueIndex)
+                                    if (selectedQueueIndex in queue.indices) {
+                                        PlayerController.playFromList(queue, selectedQueueIndex)
                                         menuOpen = false
                                     }
                                 }
@@ -629,7 +629,8 @@ private fun QueueHost(
             shuffle = shuffle,
             repeatMode = repeatMode,
             onSelect = { i ->
-                if (i != currentIndex) PlayerController.playTracks(queue, i)
+                // 点当前曲目：playFromList 保持进度、暂停态恢复播放；点其它曲目正常起播
+                PlayerController.playFromList(queue, i)
                 onDismiss()
             }
         )

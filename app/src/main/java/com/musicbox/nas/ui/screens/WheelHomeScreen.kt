@@ -172,7 +172,9 @@ internal fun WheelHome(
         when (item) {
             is WheelItem.Op -> push(item.node)
             is WheelItem.Track -> {
-                PlayerController.playTracks(item.all, item.index)
+                // 点击正在播放的曲目时 playFromList 保持进度不从头；其余正常起播。
+                // 两种情况都进入播放页（横屏 CoverFlow 的 enterPlayer=false 除外）。
+                PlayerController.playFromList(item.all, item.index)
                 if (enterPlayer) navController.navigate("player")
             }
             is WheelItem.Action -> {
