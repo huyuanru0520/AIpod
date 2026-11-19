@@ -110,9 +110,11 @@ object PlayerHolder {
             .setEnableDecoderFallback(true)
             .setExtensionRendererMode(extensionMode)
 
-        // 无损音频码率高且来自网络，适当放大缓冲以减少卡顿
+        // 无损音频码率高且来自网络：保留够用的缓冲防止卡顿，但不再攒到 60s。
+        // min 20s→12s、max 60s→30s：切后台时不会为「攒满 60 秒」持续下载，
+        // 降低后台流量与内存占用；bufferForPlayback 仍是 2.5s，起播速度不受影响。
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(20_000, 60_000, 2_500, 2_500)
+            .setBufferDurationsMs(12_000, 30_000, 2_500, 2_500)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 

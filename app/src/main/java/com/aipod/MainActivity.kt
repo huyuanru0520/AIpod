@@ -377,18 +377,22 @@ private fun AppRoot() {
         )
         // 系统栏隐藏是异步动画，上面这条记录的是「刚请求时」的快照。
         // 等 1.2 秒后再记一条 settled，直接看出最终是否真的铺满（statusTop 应为 0）。
-        kotlinx.coroutines.delay(1200)
-        val s = androidx.core.view.ViewCompat.getRootWindowInsets(decor)
-        CrashLogger.info(
-            "Immersive",
-            "settled(1.2s) immersive=$immersive keepStatus=${activity.keepStatusBarVisible} v=${BuildConfig.VERSION_NAME} statusTop=" +
-                (s?.getInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars())?.top ?: -1) +
-                " navBottom=" + (s?.getInsets(androidx.core.view.WindowInsetsCompat.Type.navigationBars())?.bottom ?: -1) +
-                " statusVisible=" + (s?.isVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars())) +
-                " navVisible=" + (s?.isVisible(androidx.core.view.WindowInsetsCompat.Type.navigationBars())) +
-                " decorH=${decor.height} contentH=" +
-                (decor.findViewById<android.view.View>(android.R.id.content)?.height)
-        )
+        // 纯诊断开销：仅在调试模式开启时才起这个协程+写日志+触发全量落盘；
+        // 普通用户每次进出播放页都做一遍是浪费（1.2s 协程 + 三通道全量 flush）。
+        if (CrashLogger.enabled) {
+            kotlinx.coroutines.delay(1200)
+            val s = androidx.core.view.ViewCompat.getRootWindowInsets(decor)
+            CrashLogger.info(
+                "Immersive",
+                "settled(1.2s) immersive=$immersive keepStatus=${activity.keepStatusBarVisible} v=${BuildConfig.VERSION_NAME} statusTop=" +
+                    (s?.getInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars())?.top ?: -1) +
+                    " navBottom=" + (s?.getInsets(androidx.core.view.WindowInsetsCompat.Type.navigationBars())?.bottom ?: -1) +
+                    " statusVisible=" + (s?.isVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars())) +
+                    " navVisible=" + (s?.isVisible(androidx.core.view.WindowInsetsCompat.Type.navigationBars())) +
+                    " decorH=${decor.height} contentH=" +
+                    (decor.findViewById<android.view.View>(android.R.id.content)?.height)
+            )
+        }
     }
 
     // 安卓手势返回 / 返回键：按导航栈逐层回退；首页时退到后台而不是 finish 退出应用。

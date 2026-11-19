@@ -84,7 +84,13 @@ import com.aipod.ui.components.rememberCoverBitmap
 import com.aipod.ui.theme.BrandRed
 import com.aipod.util.CrashLogger
 import com.aipod.util.formatDuration
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -622,15 +628,50 @@ internal sealed class WheelItem {
  * 循环会自然终止，因此三种音源统一走这里没有副作用。设 100 页上限兜底防止异常死循环。
  */
 private suspend fun loadAllSongs(data: SourceBrowserData): List<com.aipod.data.Track> {
-    val all = mutableListOf<com.aipod.data.Track>()
-    var page = 1
-    while (page <= 100) {
-        val (list, total) = data.loadSongs(page)
-        if (list.isEmpty()) break
-        all.addAll(list)
-        if (total > 0 && all.size >= total) break
-        page++
+    // 第 1 页必须串行：飞牛要用它拿 total 和单页条数，WebDAV/本地则第 1 页就返回全量。
+    val (first, total) = try {
+        data.loadSongs(1)
+    } catch (e: CancellationException) {
+        throw e // 页面切走/取消必须向上传播，不能吞掉（否则协程作用域泄露、日志误报）
+    } catch (e: Exception) {
+        com.aipod.util.CrashLogger.error("loadAllSongs.p1", e)
+        return emptyList()
     }
+    if (first.isEmpty()) return emptyList()
+    // 第 1 页已取满（WebDAV/本地：total=0 或第 1 页即全部）→ 直接返回，不多发请求。
+    if (total <= 0 || first.size >= total) return first
+
+    // 按第 1 页实际条数推算总页数，上限 100 页兜底防异常循环。
+    val pageSize = first.size
+    val pageCount = ((total + pageSize - 1) / pageSize).coerceAtMost(100)
+    if (pageCount <= 1) return first
+
+    // 剩余页并发拉取（限 4 路，避免对 NAS 造成瞬时压力 / 被网盘判异常），
+    // 结果按页码回填到数组，保证与串行版完全一致的歌曲顺序。
+    val gate = Semaphore(4)
+    val pages = coroutineScope {
+        (2..pageCount).map { p ->
+            async {
+                gate.withPermit {
+                    try {
+                        data.loadSongs(p).first
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        com.aipod.util.CrashLogger.error("loadAllSongs.p$p", e)
+                        emptyList()
+                    }
+                }
+            }
+        }.awaitAll()
+    }
+    val all = ArrayList<com.aipod.data.Track>(total.coerceAtMost(Int.MAX_VALUE - 8))
+    all.addAll(first)
+    pages.forEach { all.addAll(it) }
+    com.aipod.util.CrashLogger.info(
+        "loadAllSongs",
+        "${data.sourceLabel} 并行拉取 $pageCount 页完成：${all.size}/$total 首"
+    )
     return all
 }
 
