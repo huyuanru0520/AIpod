@@ -31,6 +31,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
 val Application.dataStore: DataStore<Preferences> by preferencesDataStore(name = "musicbox_prefs")
@@ -142,6 +143,9 @@ class MusicBoxApp : Application() {
 
     /** 本地音乐曲库：扫描本机文件夹得到的曲目，冷启动从 DataStore 恢复。 */
     val localLibrary = MutableStateFlow<List<Track>>(emptyList())
+    /** 本地扫描进度文案（App 级，页面重建不丢）。 */
+    val localScanProgress = MutableStateFlow("")
+    val localScanning = MutableStateFlow(false)
 
     val webDavScanProgress = MutableStateFlow("")
     val webDavScanning = MutableStateFlow(false)
@@ -715,6 +719,39 @@ class MusicBoxApp : Application() {
     suspend fun setLocalLibrary(tracks: List<Track>) {
         localLibrary.value = tracks
         dataStore.edit { it[LOCAL_LIBRARY] = encodeTracks(tracks) }
+    }
+
+    /**
+     * App 级本地扫描：挂 [appScope] 执行，切页 / 选文件夹返回导致的页面重建都不会中断。
+     * 之前这段跑在设置页的 rememberCoroutineScope 里，SAF 选完文件夹返回时页面一旦重建，
+     * 协程被取消、结果不写库，表现为「添加文件夹后没有扫描到任何歌曲」。
+     * @param onDone 扫描结束回调（count），供 UI 显示状态；可为 null。
+     */
+    fun startLocalScan(context: Context, treeUri: android.net.Uri, onDone: ((Int) -> Unit)? = null) {
+        if (localScanning.value) return
+        appScope.launch {
+            localScanning.value = true
+            localScanProgress.value = "正在扫描本地音乐…"
+            CrashLogger.info("LocalScan", "开始扫描：$treeUri")
+            try {
+                val tracks = com.musicbox.nas.scan.LocalMusicScanner.scan(context, treeUri) { n, name ->
+                    localScanProgress.value = "已找到 $n 首 · ${name.take(24)}"
+                }
+                setLocalLibrary(tracks)
+                val msg = if (tracks.isEmpty())
+                    "本地扫描完成：未找到音频文件（请确认所选文件夹内含 mp3/flac/m4a 等）"
+                else "本地扫描完成：${tracks.size} 首"
+                localScanProgress.value = msg
+                CrashLogger.info("LocalScan", msg)
+                withContext(kotlinx.coroutines.Dispatchers.Main) { onDone?.invoke(tracks.size) }
+            } catch (e: Exception) {
+                CrashLogger.error("LocalScan.scan", e)
+                localScanProgress.value = "本地扫描失败：${e.message ?: e::class.java.simpleName}"
+                withContext(kotlinx.coroutines.Dispatchers.Main) { onDone?.invoke(-1) }
+            } finally {
+                localScanning.value = false
+            }
+        }
     }
 
     // ---- 收藏 / 本地库 JSON 编解码 ----

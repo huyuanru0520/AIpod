@@ -137,8 +137,9 @@ fun WheelSettingsScreen(navController: NavController) {
     var transcodeSize by remember { mutableStateOf(AacTranscoder.cacheSize()) }
     var coverCacheSize by remember { mutableStateOf(coverCacheSizeBytes()) }
     var showLogs by remember { mutableStateOf(false) }
-    var localScanning by remember { mutableStateOf(false) }
-    var localScanProgress by remember { mutableStateOf("") }
+    // 本地扫描状态提到 App 级：选文件夹返回时页面重建也不会中断扫描、进度不丢。
+    val localScanning by app.localScanning.collectAsState()
+    val localScanProgress by app.localScanProgress.collectAsState()
     val localTracks by app.localLibrary.collectAsState()
     val localCount = localTracks.size
     // 日志导出：下载目录里日志文件的真实路径、大小与写入通道结果
@@ -192,15 +193,17 @@ fun WheelSettingsScreen(navController: NavController) {
                 uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
         }
-        scope.launch {
-            localScanning = true
-            statusLine = "正在扫描本地音乐…"
-            val tracks = com.musicbox.nas.scan.LocalMusicScanner.scan(context, uri) { n, name ->
-                localScanProgress = "已找到 $n 首 · ${name.take(20)}"
+        // 交给 App 级作用域执行：SAF 选完文件夹返回时页面可能重建，
+        // 用页面 scope 会让扫描协程被取消、结果根本写不进曲库（表现为「添加文件夹后一首都没扫到」）。
+        statusLine = "正在扫描本地音乐…"
+        app.startLocalScan(context, uri) { count ->
+            if (count >= 0) {
+                statusLine = if (count > 0) "本地扫描完成：$count 首，已切到本地音乐" else "未找到音频文件，请确认文件夹内含 mp3/flac/m4a 等"
+                // 扫到歌就自动切到本地音源，省得用户还要手动切换才能看到。
+                if (count > 0) scope.launch { app.setSource(SourceMode.LOCAL) }
+            } else {
+                statusLine = "本地扫描失败，请查看日志"
             }
-            app.setLocalLibrary(tracks)
-            localScanning = false
-            statusLine = "本地扫描完成：${tracks.size} 首"
         }
     }
     // 日志另存：用系统文件选择器自选位置写出完整日志（滚轮页无触摸，由转轮选中后触发）
@@ -227,7 +230,7 @@ fun WheelSettingsScreen(navController: NavController) {
     val items: List<SettingItem> = when (node) {
         SettingsNode.Root -> buildRootSettings(
             sourceMode, audioQuality, scanPace, hapticStrength, debugMode, showDescriptions,
-            webDav, fnos, webDavScanning, coverCacheSize, transcodeSize, localCount, localScanning
+            webDav, fnos, webDavScanning, coverCacheSize, transcodeSize, localCount, localScanning, localScanProgress
         )
         SettingsNode.Tabs -> buildTabsSettings(visibleTabs)
         SettingsNode.Logs -> buildLogsSettings(debugMode, logInfo)
@@ -487,7 +490,7 @@ private fun SettingItem.subtitle(): String = when (this) {
 private fun buildRootSettings(
     source: SourceMode, quality: AudioQuality,
     scanPace: Long, haptic: Int, debug: Boolean, showDescriptions: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
-    coverSize: Long, transcodeSize: Long, localCount: Int, localScanning: Boolean
+    coverSize: Long, transcodeSize: Long, localCount: Int, localScanning: Boolean, localScanProgress: String
 ): List<SettingItem> {
     val sourceName = when (source) {
         SourceMode.WEBDAV -> "WebDAV"
@@ -505,7 +508,11 @@ private fun buildRootSettings(
     out += SettingItem.Choice("haptic", "震动强度", hapticName, Icons.Default.Vibration)
     out += SettingItem.Nav("webdav", "WebDAV 连接", if (webDav != null) "已配置" else "未配置", Icons.Default.Link)
     out += SettingItem.Nav("fnos", "飞牛音乐登录", if (fnos != null) "已登录" else "未登录", Icons.Default.Storage)
-    out += SettingItem.Action("scanlocal", "扫描本地音乐", if (localScanning) "扫描中…" else "已收录 $localCount 首 · 选文件夹", Icons.Default.Folder)
+    out += SettingItem.Action(
+        "scanlocal", "扫描本地音乐",
+        if (localScanning) localScanProgress.ifBlank { "扫描中…" } else "已收录 $localCount 首 · 选文件夹",
+        Icons.Default.Folder
+    )
     out += SettingItem.Action("scan", "立即扫描 WebDAV", if (scanning) "扫描中…" else "扫描音乐库", Icons.Default.Storage)
     out += SettingItem.Action("test", "测试连接 / 诊断", "WebDAV 连接自检", Icons.Default.Link)
     out += SettingItem.Action("probe", "检测飞牛新接口", "风格 / 文件夹 / 漫游", Icons.Default.Storage)

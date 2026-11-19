@@ -7,6 +7,7 @@ import android.provider.MediaStore
 import android.util.Log
 import com.musicbox.nas.data.SourceType
 import com.musicbox.nas.data.Track
+import com.musicbox.nas.util.CrashLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -39,9 +40,13 @@ object LocalMusicScanner {
         onProgress: suspend (Int, String) -> Unit = { _, _ -> }
     ): List<Track> = withContext(Dispatchers.IO) {
         val found = mutableListOf<Track>()
-        walk(context, treeUri, found, onProgress)
+        var dirsVisited = 0
+        var filesSeen = 0
+        walk(context, treeUri, found, onProgress, { dirsVisited++ }, { filesSeen++ })
         found.sortBy { "${it.folder}/${it.title}".lowercase() }
-        Log.i(TAG, "本地扫描完成：${found.size} 首")
+        val summary = "本地扫描完成：${found.size} 首（遍历 $dirsVisited 个目录 / 见到 $filesSeen 个文件）根=$treeUri"
+        Log.i(TAG, summary)
+        CrashLogger.info("LocalScan", summary)
         found
     }
 
@@ -49,8 +54,11 @@ object LocalMusicScanner {
         context: Context,
         dirUri: Uri,
         out: MutableList<Track>,
-        onProgress: suspend (Int, String) -> Unit
+        onProgress: suspend (Int, String) -> Unit,
+        onDir: () -> Unit = {},
+        onFile: () -> Unit = {}
     ) {
+        onDir()
         val childrenUri = try {
             DocumentsContract.buildChildDocumentsUriUsingTree(
                 dirUri,
@@ -84,9 +92,10 @@ object LocalMusicScanner {
                 val mime = if (mimeIdx >= 0) c.getString(mimeIdx) ?: "" else ""
                 val isDir = mime == DocumentsContract.Document.MIME_TYPE_DIR
                 if (docId == null) continue
+                onFile()
                 if (isDir) {
                     val childUri = DocumentsContract.buildDocumentUriUsingTree(dirUri, docId)
-                    walk(context, childUri, out, onProgress)
+                    walk(context, childUri, out, onProgress, onDir, onFile)
                 } else if (mime.startsWith("audio/") || name.extensionLower() in AUDIO_EXT) {
                     val uri = DocumentsContract.buildDocumentUriUsingTree(dirUri, docId)
                     val track = toTrack(context, uri, name, out.size)
