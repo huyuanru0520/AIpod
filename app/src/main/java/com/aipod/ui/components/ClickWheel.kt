@@ -50,7 +50,6 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
-import kotlin.math.roundToInt
 
 /**
  * 透明玻璃 iPod 点击轮。
@@ -132,28 +131,6 @@ fun ClickWheel(
     )
 
     Box(modifier.size(diameter)) {
-        // 圆形投影：径向渐变，避免 Modifier.shadow 在 CircleShape 上画出六边形
-        Canvas(Modifier.fillMaxSize()) {
-            val r = minOf(size.width, size.height) / 2f
-            val c = center
-            // 浅色磨砂背景上，过重且向下偏移的投影会显出一圈明显深灰月牙。
-            // 降低强度、收紧半径、去掉下偏移，让阴影均匀贴边、若有若无。
-            val shadowA = if (dark) 0.20f else 0.14f
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color.Black.copy(alpha = shadowA),
-                        Color.Black.copy(alpha = shadowA * 0.30f),
-                        Color.Transparent
-                    ),
-                    center = c,
-                    radius = r * 1.10f
-                ),
-                radius = r * 1.04f,
-                center = c
-            )
-        }
-
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
@@ -296,11 +273,16 @@ fun ClickWheel(
             val onStrong = if (dark) Color.White else Color(0xFF1A1A1F)
             GlassSurface(
                 modifier = Modifier.fillMaxSize(),
-                shape = CircleShape,
+                // 用 50% 圆角而非 CircleShape：正方形上视觉仍是正圆，但它是 CornerBasedShape，
+                // 能给出圆角半径 → backdrop 的 lens 折射才生效（CircleShape 会被库拒绝并抛异常）。
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50),
                 tint = Color.White,
                 tintAlpha = if (dark) 0.09f else 0.46f,
                 elevation = 0.dp,
-                forceDark = dark
+                // 圆形滚轮：GlassSurface 内部会用 backdrop 库做真背景采样（有 backdrop 时），
+                // 否则退回 Canvas 窄环高光兜底。
+                blur = true,
+                circular = true
             ) {
                 Text(
                     "MENU",

@@ -1,6 +1,5 @@
 package com.aipod.ui.screens
 
-import android.content.res.Configuration
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -23,14 +22,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
@@ -42,11 +39,9 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
@@ -64,11 +59,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.aipod.LibraryTabs
@@ -80,10 +73,12 @@ import com.aipod.ui.components.CoverImage
 import com.aipod.ui.components.fadeEdges
 import com.aipod.ui.components.fadeInList
 import com.aipod.ui.components.glassHighlight
+import com.aipod.ui.components.glassBackdropSource
+import com.aipod.ui.components.rememberGlassBackdrop
+import com.aipod.ui.components.LocalGlassBackdrop
 import com.aipod.ui.components.rememberCoverBitmap
 import com.aipod.ui.theme.BrandRed
 import com.aipod.util.CrashLogger
-import com.aipod.util.formatDuration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -92,7 +87,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlin.math.abs
-import kotlin.math.roundToInt
 
 /**
  * 滚轮首页的进程内缓存。
@@ -105,7 +99,13 @@ private object WheelMemory {
     private val items = HashMap<String, List<WheelItem>>()
     private val selections = HashMap<String, Int>()
 
-    fun key(memoryKey: String, node: WheelNode): String = "$memoryKey|${nodeKey(node)}"
+    /**
+     * 缓存 key 带上 [data] 的实例身份：上游 data 由 remember(tracks/lib/conn) 构造，
+     * 曲库未变时是同一实例 → key 稳定 → 命中缓存；重新扫描/切音源产生新实例 → key 变化
+     * → 旧缓存自然失效并重新加载。这样"命中即返回"不会让曲库刷新后长期显示旧数据。
+     */
+    fun key(memoryKey: String, node: WheelNode, data: Any): String =
+        "$memoryKey|${nodeKey(node)}|${System.identityHashCode(data)}"
 
     fun items(key: String): List<WheelItem>? = items[key]
     fun saveItems(key: String, list: List<WheelItem>) { items[key] = list }
@@ -157,9 +157,6 @@ internal fun WheelHome(
     scanning: Boolean = false,
     scanProgress: String = ""
 ) {
-    val isLandscape =
-        LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-
     // 当前正在播放的曲目：主页背景取它的封面做高斯模糊；无播放时回退到苹果红模糊。
     val queue by PlayerController.queue.collectAsState()
     val currentIndex by PlayerController.currentIndex.collectAsState()
@@ -169,8 +166,6 @@ internal fun WheelHome(
     var stack by remember(data) { mutableStateOf<List<WheelNode>>(listOf(WheelNode.Root)) }
     // 当前层选中项：切层时从 WheelMemory 恢复上次位置（长按 MENU 回主界面再进入仍停原处）
     var selected by remember(data) { mutableStateOf(0) }
-    // 横屏：CoverFlow 点开的专辑详情节点；null=封面流。横竖屏各用一套浏览状态，互不干扰。
-    var landscapeDetail by remember(data) { mutableStateOf<WheelNode?>(null) }
 
     // 页面数据由 Worker 异步加载；命中 WheelMemory 缓存时先用缓存立即显示，不再转圈。
     val scope = rememberCoroutineScope()
@@ -183,15 +178,13 @@ internal fun WheelHome(
     var searchPhase by remember(data) { mutableStateOf(0) } // 0=字母盘输入, 1=结果列表
 
     val node = stack.last()
-    // 横屏：无滚轮，点封面进专辑列表。landscapeDetail 为 null 时展示专辑封面流；
-    // 非 null 时展示该专辑的曲目列表（仍全屏），左上角返回键回到封面流。
-    // 竖屏：Root 主菜单直接映射为「专辑」层由滚轮驱动（保持既有行为）。
-    val effectiveNode: WheelNode = if (isLandscape) (landscapeDetail ?: WheelNode.Albums) else node
+    // 竖屏单一路径：Root 主菜单 → 转轮选择分类 → 进入对应层。
+    // 横屏 CoverFlow 分支已移除（App 锁死竖屏）。
 
-    val cacheKey = WheelMemory.key(memoryKey, effectiveNode)
-    val isSearch = effectiveNode is WheelNode.Search && searchQuery.isNotBlank()
+    val cacheKey = WheelMemory.key(memoryKey, node, data)
+    val isSearch = node is WheelNode.Search && searchQuery.isNotBlank()
 
-    LaunchedEffect(effectiveNode, data, searchQuery) {
+    LaunchedEffect(node, data, searchQuery) {
         loadError = null
         // 命中缓存：立即显示列表与上次选中位置，不转圈；随后在后台静默刷新数据。
         // 搜索结果按关键词实时查询，不进缓存。
@@ -200,6 +193,14 @@ internal fun WheelHome(
             items = cached
             selected = WheelMemory.selection(cacheKey).coerceIn(0, cached.lastIndex.coerceAtLeast(0))
             loading = false
+            // 关键：命中缓存后必须立即返回，绝不能再往下走 loadNode 静默刷新。
+            // 否则会：① 再拉一次全量 2185 首 / 22 页；② 返回后用【全新的 list 对象】二次整体
+            // 替换 items；③ itemsIndexed 无稳定 key → 2185 行全部重新 diff + 组合；④ 每行
+            // glassHighlight 动画 + CoverImage 重新解码封面；⑤ selected 已恢复到深层第 N 行，
+            // 可见区正好落在深层，需即时解码该处封面。这五步叠加直接把主线程拖进 ANR，
+            // 表现为「滑动多行后退出、再次进入歌曲页卡死」——这正是本 bug 的根因。
+            // 缓存本身就是完整的 2185 首曲库（变化极少），直接使用即可，无需每次进入都刷新。
+            return@LaunchedEffect
         } else {
             loading = true
             if (!isSearch) selected = WheelMemory.selection(cacheKey).coerceAtLeast(0)
@@ -207,7 +208,7 @@ internal fun WheelHome(
         val result = try {
             Result.success(
                 if (isSearch) data.search(searchQuery).let { list -> list.mapIndexed { i, t -> t.toWheel(i, list) } }
-                else loadNode(effectiveNode, data)
+                else loadNode(node, data)
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             // 页面切走 / 重组导致协程取消（拉全量分页时更容易被取消）：正常流程，
@@ -317,110 +318,14 @@ internal fun WheelHome(
         }
     }
 
-    // 沉浸：横屏 CoverFlow 全屏；竖屏保留系统栏（状态栏常驻，避免历史黑带问题）。
-    val app = MusicBoxApp.instance
-    val immersive = isLandscape
-    DisposableEffect(immersive) {
-        app.fullScreenMode.value = immersive
-        onDispose { app.fullScreenMode.value = false }
-    }
-
-    // 苹果音乐红：主界面底色统一用它，横竖屏都不再是黑底。
+    // 苹果音乐红：主界面底色统一用它，不再是黑底。
     val appleRed = com.aipod.ui.theme.BrandRed
 
-    if (isLandscape) {
-        // ============ 横屏：全屏 CoverFlow，无滚轮，点击进专辑列表，左上角返回 ============
-        Box(Modifier.fillMaxSize()) {
-            WheelBackdrop(current = currentTrack, red = appleRed)
-            when {
-                loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    CircularProgressIndicator(color = Color.White)
-                }
-                loadError != null -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Text(loadError ?: "加载失败", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodyMedium)
-                }
-                items.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Text(effectiveNode.hint, color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodyMedium)
-                }
-                landscapeDetail != null -> {
-                    // 专辑曲目列表（仍全屏）：可点击播放，左上角返回封面流
-                    Column(Modifier.fillMaxSize()) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(onClick = { landscapeDetail = null }) {
-                                Icon(Icons.Default.ArrowBack, contentDescription = "返回封面流", tint = Color.White)
-                            }
-                            Column(Modifier.weight(1f)) {
-                                Text(effectiveNode.title, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text("共 ${items.size} 首 · 点击播放", color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
-                        LazyColumn(
-                            Modifier.fillMaxSize().weight(1f).fadeInList(),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                        ) {
-                            itemsIndexed(items) { i, item ->
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .height(64.dp)
-                                        .clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication = null
-                                        ) { confirm(item, enterPlayer = false) }
-                                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    val cover = when (item) {
-                                        is WheelItem.Op -> item.cover
-                                        is WheelItem.Track -> item.cover
-                                        is WheelItem.Action -> null
-                                    }
-                                    val embedded = when (item) {
-                                        is WheelItem.Op -> item.embedded
-                                        is WheelItem.Track -> item.embedded
-                                        is WheelItem.Action -> null
-                                    }
-                                    if (cover != null || embedded != null) {
-                                        CoverImage(cover, Modifier.size(46.dp), embeddedAudioUrl = embedded)
-                                    } else {
-                                        Box(Modifier.size(46.dp), Alignment.Center) {
-                                            Icon(Icons.Default.MusicNote, null, tint = Color.White.copy(alpha = 0.7f))
-                                        }
-                                    }
-                                    Spacer(Modifier.width(12.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(item.title(), color = Color.White, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text(item.subtitle(), color = Color.White.copy(alpha = 0.65f), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                else -> {
-                    // 专辑封面流：左右滑动切换（CoverFlow 自身保留滑动），点击封面进专辑
-                    ClickCoverFlow(
-                        items = items,
-                        selected = selected.coerceIn(0, items.lastIndex),
-                        onSelected = { selected = it },
-                        onClick = { item ->
-                            when (item) {
-                                is WheelItem.Op -> landscapeDetail = item.node
-                                is WheelItem.Track -> confirm(item, enterPlayer = false)
-                                is WheelItem.Action -> confirm(item, enterPlayer = false)
-                            }
-                        }
-                    )
-                }
-            }
-        }
-        return
-    }
-
+    // 液态玻璃采样源：背景层录制进该 backdrop，滚轮玻璃从同一实例采样（兄弟配对）。
+    val glassBackdrop = rememberGlassBackdrop()
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalGlassBackdrop provides glassBackdrop
+    ) {
     // ============ 竖屏：动态背景（播放封面模糊 / 苹果红）+ 屏幕列表 + 滚轮 ============
     Box(Modifier.fillMaxSize()) {
         WheelBackdrop(current = currentTrack, red = appleRed)
@@ -463,11 +368,21 @@ internal fun WheelHome(
                     }
                     items.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                         Text(
-                            if (scanning) "正在扫描音乐库，找到的歌曲会自动出现…" else effectiveNode.hint,
+                            if (scanning) "正在扫描音乐库，找到的歌曲会自动出现…" else node.hint,
                             color = Color.White.copy(alpha = 0.8f),
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
+                    // 专辑层：3D CoverFlow 唱片架（转轮/左右键切换封面，中心键或点封面进专辑）。
+                    // 这是用户真正看到的「专辑列表」——所有音源都走 WheelHome，这里才是生效点。
+                    node is WheelNode.Albums -> ClickCoverFlow(
+                        items = items,
+                        selected = selected.coerceIn(0, items.lastIndex),
+                        onSelected = { selected = it },
+                        onClick = { confirm(it) },
+                        followSelection = true,
+                        hint = "转动滚轮切换封面 · 按中心键进专辑"
+                    )
                     else -> {
                         WheelList(
                             items = items,
@@ -543,6 +458,7 @@ internal fun WheelHome(
             }
         }
     }
+    } // CompositionLocalProvider(LocalGlassBackdrop)
 }
 
 /**
@@ -556,7 +472,11 @@ internal fun WheelHome(
 @Composable
 private fun WheelBackdrop(current: com.aipod.data.Track?, red: Color) {
     val bmp = rememberCoverBitmap(current?.coverUrl, current?.embeddedAudioUrl)
-    Box(Modifier.fillMaxSize()) {
+    val backdropBlur = com.aipod.ui.components.LocalGlassBlurConfig.current.backdropBlur
+    // 封面层：模糊度由设置「背景模糊度」档位控制；整块录制进 backdrop 供滚轮玻璃从同一实例采样，
+    // 暗蒙层作为兄弟节点压暗背景保证白字可读。
+    Box(Modifier.fillMaxSize().glassBackdropSource(LocalGlassBackdrop.current)) {
+      Box(Modifier.fillMaxSize()) {
         if (bmp != null) {
             Image(
                 bitmap = bmp,
@@ -565,17 +485,15 @@ private fun WheelBackdrop(current: com.aipod.data.Track?, red: Color) {
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer { scaleX = 1.15f; scaleY = 1.15f }
-                    .blur(32.dp)
+                    .blur(backdropBlur)
             )
-            // 暗化蒙层：让白色文字与玻璃高亮在任意封面颜色上都清晰
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.46f)))
         } else {
-            // 无播放：中性磨砂玻璃（深灰雾面 + 柔光斑 + 高斯模糊），不掺任何彩色
+            // 无播放：中性磨砂玻璃（深灰雾面 + 柔光斑 + 轻度模糊），不掺任何彩色
             Canvas(
                 Modifier
                     .fillMaxSize()
                     .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
-                    .blur(40.dp)
+                    .blur(14.dp)
             ) {
                 val w = size.width
                 val h = size.height
@@ -601,6 +519,9 @@ private fun WheelBackdrop(current: com.aipod.data.Track?, red: Color) {
                 )
             }
         }
+      }
+      // 暗蒙层：压暗背景保证白字可读
+      Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.42f)))
     }
 }
 
@@ -788,9 +709,18 @@ private fun WheelList(
     immersive: Boolean
 ) {
     val listState = rememberLazyListState()
-    // 选中项变化时自动滚到可视区中央
+    // 选中项变化时滚动，按跨度分两种走法：
+    // - 大跨度（再次进入恢复上次位置、切换层级）：必须瞬时 scrollToItem。
+    //   若此时仍用 animateScrollToItem，会从第 0 项一路动画滚到第 N 项，
+    //   沿途组合数百个 item 并触发同等数量的网络封面加载，主线程测量 + 图片解码风暴
+    //   直接表现为「进入歌曲页后卡死无响应」。这正是"滑动多行后退出再进入"必现的根因。
+    // - 小跨度（转轮逐格 / 左右键）：animateScrollToItem 平滑跟随，保留 iPod 手感。
     LaunchedEffect(selected) {
-        if (selected in items.indices) {
+        if (selected !in items.indices) return@LaunchedEffect
+        val first = listState.firstVisibleItemIndex
+        if (abs(selected - first) > 4) {
+            runCatching { listState.scrollToItem(selected, -180) }
+        } else {
             runCatching { listState.animateScrollToItem(selected, -180) }
         }
     }
@@ -804,7 +734,14 @@ private fun WheelList(
             verticalArrangement = Arrangement.spacedBy(4.dp),
             contentPadding = PaddingValues(vertical = 24.dp)
         ) {
-            itemsIndexed(items) { i, item ->
+            // 稳定 key：按内容标识而非下标，避免 items 被等价列表替换时 2185 行全部重新组合。
+            itemsIndexed(items, key = { _, item ->
+                when (item) {
+                    is WheelItem.Op -> "op-${nodeKey(item.node)}"
+                    is WheelItem.Track -> "track-${item.index}-${item.title}"
+                    is WheelItem.Action -> "action-${item.key}"
+                }
+            }) { i, item ->
                 val sel = i == selected
                 Row(
                     Modifier
@@ -868,28 +805,50 @@ private fun CategoryIcon(node: WheelNode, selected: Boolean, fg: Color) {
 // ==================== 横屏：全屏 CoverFlow 唱片架（左右滑动 + 点击选择） ====================
 
 /**
- * 横屏全屏 CoverFlow：铺满整屏、没有滚轮、没有底栏。
- * - 左右滑动：用 LazyRow 自带手势（这是被允许的例外——CoverFlow 保留左右滑动切封面）；
- *   滑动停下后把居中项回报给 [onSelected]，3D 倾斜随之更新。
- * - 点击：点任意封面即回调 [onClick]，由上层决定进专辑列表还是播放。
+ * 3D CoverFlow 唱片架（竖屏专辑层 / 触摸滑动）。
+ * - 触摸左右滑动：LazyRow 自带手势，滑动停下后把居中项回报 [onSelected]；
+ * - 转轮 / 左右键：[followSelection=true] 时 [selected] 变化会平滑滚动到对应封面；
+ * - 点击：点任意封面即回调 [onClick]，由上层决定进专辑还是播放。
+ *
+ * 回环防护：程序因 selected 变化而滚动期间用 [suppressReport] 抑制「停止→回报」，
+ * 避免「selected→滚动→回报→selected」互相触发造成抖动 / 自行滑回。
  */
 @Composable
 private fun ClickCoverFlow(
     items: List<WheelItem>,
     selected: Int,
     onSelected: (Int) -> Unit,
-    onClick: (WheelItem) -> Unit
+    onClick: (WheelItem) -> Unit,
+    followSelection: Boolean = false,
+    hint: String = "左右滑动切换封面 · 点击进专辑"
 ) {
     val rowState = rememberLazyListState()
-    // 只在首次有数据时定位一次到传入的选中项；之后绝不再因 selected 变化反向滚动。
-    // 之前的实现同时有「selected 变化 → animateScrollToItem」和「滑动停止 → onSelected」，
-    // 两者互相触发形成回环，表现为向后滑动静置后又自行滑回第一张。
+    // 首次定位：瞬时跳到传入的选中项（无动画），避免进入页面时长距离滚动。
     var didInit by remember(items) { mutableStateOf(false) }
+    // 程序滚动期间抑制回报，防止回环。
+    var suppressReport by remember { mutableStateOf(false) }
     LaunchedEffect(items) {
         if (!didInit && items.isNotEmpty()) {
             didInit = true
             val target = selected.coerceIn(0, items.lastIndex)
             runCatching { rowState.scrollToItem(target, 0) }
+        }
+    }
+    // 竖屏转轮 / 左右键切换：selected 变化时平滑滚动到对应封面。
+    if (followSelection) {
+        LaunchedEffect(selected, items) {
+            if (!didInit || items.isEmpty()) return@LaunchedEffect
+            val target = selected.coerceIn(0, items.lastIndex)
+            // 只有当目标项确实偏离中心才滚动，避免触摸回报后的重复滚动。
+            val info = rowState.layoutInfo
+            val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+            val vi = info.visibleItemsInfo.firstOrNull { it.index == target }
+            val off = if (vi != null) abs(vi.offset + vi.size / 2f - center) else Float.MAX_VALUE
+            if (off > 4f) {
+                suppressReport = true
+                runCatching { rowState.animateScrollToItem(target) }
+                suppressReport = false
+            }
         }
     }
 
@@ -908,7 +867,7 @@ private fun ClickCoverFlow(
     val scrolling by remember { derivedStateOf { rowState.isScrollInProgress } }
     var settledCentered by remember(items) { mutableStateOf(0) }
     LaunchedEffect(scrolling, items) {
-        if (!scrolling && items.isNotEmpty()) {
+        if (!scrolling && !suppressReport && items.isNotEmpty()) {
             val info = rowState.layoutInfo
             val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
             val c = info.visibleItemsInfo
@@ -918,7 +877,15 @@ private fun ClickCoverFlow(
         }
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val card = minOf(maxHeight * 0.55f, maxWidth * 0.20f)
+        // 竖屏专辑层（followSelection）：屏幕区较窄且矮，卡片按高度为主、宽度兜底；
+        // 触摸全屏流：沿用原横屏比例（宽屏按宽度 0.2）。
+        val card = if (followSelection) {
+            // 竖屏专辑封面略放大：由 高0.60/宽0.56 提到 高0.68/宽0.64。
+            // itemW = card*1.18、两侧 contentPadding=(宽-itemW)/2 仍为正，邻封正常露出。
+            minOf(maxHeight * 0.68f, maxWidth * 0.64f)
+        } else {
+            minOf(maxHeight * 0.55f, maxWidth * 0.20f)
+        }
         val itemW = card * 1.18f
         LazyRow(
             state = rowState,
@@ -1017,9 +984,9 @@ private fun ClickCoverFlow(
                 }
             }
         }
-        // 顶部提示：左右滑动切换 · 点击进专辑
+        // 顶部提示：交互方式随场景定制（竖屏转轮 / 触摸滑动）
         Text(
-            "左右滑动切换封面 · 点击进专辑",
+            hint,
             color = Color.White.copy(alpha = 0.7f),
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier

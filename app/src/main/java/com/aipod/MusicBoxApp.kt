@@ -26,6 +26,8 @@ import com.aipod.data.webdav.WebDavConnection
 import com.aipod.player.PlayerController
 import com.aipod.util.CrashLogger
 import com.aipod.util.Haptics
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -205,6 +207,10 @@ class MusicBoxApp : Application() {
      * 设置页可调，Haptics 每次触发时读取此值换算实际幅度。
      */
     val hapticStrength = MutableStateFlow(2)
+    /** 液态玻璃总开关（沿用旧 key glass_blur 兼容备份导入）。 */
+    val glassBlur = MutableStateFlow(true)
+    /** 背景模糊度档位：0=清晰、1=轻(6dp)、2=中(16dp)、3=重(32dp)。默认中档 2。 */
+    val glassBlurLevel = MutableStateFlow(2)
     /**
      * 横屏 Cover Flow / 由其打开的专辑列表是否为「全屏沉浸」态。
      * 为 true 时 MainActivity 隐藏底部导航与 MiniPlayer，并切到沉浸式系统栏。
@@ -590,6 +596,22 @@ class MusicBoxApp : Application() {
         // 震动强度（0-3，默认中档 2），同步给 Haptics
         hapticStrength.value = (p[T_HAPTIC] ?: 2).coerceIn(0, 3)
         Haptics.setStrength(hapticStrength.value)
+        // 液态玻璃开关 与 背景模糊度 完全独立：前者控制 backdrop 库玻璃层，后者只控制封面 .blur。
+        glassBlur.value = p[T_GLASS_BLUR] ?: true
+        glassBlurLevel.value = (p[T_GLASS_LEVEL] ?: 2).coerceIn(0, 3)
+        // 崩溃自降级保险：若上一次运行因液态玻璃库（com.kyant.backdrop）绘制崩溃而闪退，
+        // 本次强制关闭玻璃并清除崩溃标志，避免反复闪退循环。只在库专属特征出现时触发，
+        // 一次性降级——不写回偏好，用户可在设置页手动重新打开。
+        if (glassBlur.value && CrashLogger.hasCrash()) {
+            val crashLog = CrashLogger.read().orEmpty()
+            val glassCrash = crashLog.contains("com.kyant.backdrop", ignoreCase = true) ||
+                crashLog.contains("kyant0", ignoreCase = true)
+            if (glassCrash) {
+                glassBlur.value = false
+                CrashLogger.dismissCrash()
+                CrashLogger.info("GlassAutoOff", "检测到液态玻璃库崩溃，本次自动关闭玻璃并清除标志，退回无玻璃兜底")
+            }
+        }
         val savedSource = p[S_SOURCE]
         if (savedSource != null) {
             runCatching { sourceMode.value = SourceMode.valueOf(savedSource) }
@@ -767,6 +789,21 @@ class MusicBoxApp : Application() {
         Haptics.setStrength(v)
         dataStore.edit { it[T_HAPTIC] = v }
         CrashLogger.info("Settings", "震动强度=$v")
+    }
+
+    /** 液态玻璃开关：控制 backdrop 折射玻璃层，与背景模糊度完全独立，持久化。 */
+    suspend fun setGlassBlur(on: Boolean) {
+        glassBlur.value = on
+        dataStore.edit { it[T_GLASS_BLUR] = on }
+        CrashLogger.info("Settings", "液态玻璃=$on")
+    }
+
+    /** 背景模糊度档位：0=清晰、1=轻、2=中、3=重，仅控制封面 .blur，持久化。 */
+    suspend fun setGlassBlurLevel(level: Int) {
+        val v = level.coerceIn(0, 3)
+        glassBlurLevel.value = v
+        dataStore.edit { it[T_GLASS_LEVEL] = v }
+        CrashLogger.info("Settings", "背景模糊度=$v")
     }
 
     // ---- 收藏三表（按音源分表）----
@@ -971,6 +1008,8 @@ class MusicBoxApp : Application() {
             put("debug_mode", debugMode.value)
             put("show_descriptions", showDescriptions.value)
             put("haptic_strength", hapticStrength.value)
+            put("glass_blur", glassBlur.value)
+            put("glass_blur_level", glassBlurLevel.value)
             put("favorites_webdav", encodeIds(favWebDav.value))
             put("favorites_fnos", encodeIds(favFnos.value))
             put("favorites_local", encodeIds(favLocal.value))
@@ -1028,6 +1067,8 @@ class MusicBoxApp : Application() {
         if (o.has("debug_mode")) setDebugMode(o.optBoolean("debug_mode"))
         if (o.has("show_descriptions")) setShowDescriptions(o.optBoolean("show_descriptions"))
         if (o.has("haptic_strength")) setHapticStrength(o.optInt("haptic_strength"))
+        if (o.has("glass_blur_level")) setGlassBlurLevel(o.optInt("glass_blur_level"))
+        else if (o.has("glass_blur")) setGlassBlur(o.optBoolean("glass_blur"))
         if (o.has("favorites_webdav")) { favWebDav.value = decodeIds(o.optString("favorites_webdav")); dataStore.edit { it[FAV_WEBDAV] = encodeIds(favWebDav.value) } }
         if (o.has("favorites_fnos")) { favFnos.value = decodeIds(o.optString("favorites_fnos")); dataStore.edit { it[FAV_FNOS] = encodeIds(favFnos.value) } }
         if (o.has("favorites_local")) { favLocal.value = decodeIds(o.optString("favorites_local")); dataStore.edit { it[FAV_LOCAL] = encodeIds(favLocal.value) } }
@@ -1115,6 +1156,9 @@ private val P_VOLUME = floatPreferencesKey("wheel_volume")
 private val D_DEBUG = booleanPreferencesKey("debug_mode")
 private val T_SHOW_DESC = booleanPreferencesKey("show_descriptions")
 private val T_HAPTIC = intPreferencesKey("haptic_strength")
+/** 液态玻璃开关（默认开）。 */
+private val T_GLASS_BLUR = booleanPreferencesKey("glass_blur")
+private val T_GLASS_LEVEL = intPreferencesKey("glass_blur_level")
 /** 收藏三表：按音源分表，存 Track.id 的 JSON 数组字符串。 */
 private val FAV_WEBDAV = stringPreferencesKey("favorites_webdav")
 private val FAV_FNOS = stringPreferencesKey("favorites_fnos")

@@ -1,6 +1,5 @@
 package com.aipod.ui.screens
 
-import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
@@ -10,7 +9,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,7 +19,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -34,12 +31,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.ViewList
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -51,9 +43,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -72,8 +62,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -468,14 +456,10 @@ private sealed class BrowserDetail {
  */
 private object BrowserMemory {
     private val detailStacks = HashMap<String, List<BrowserDetail>>()
-    private val coverFlowFlags = HashMap<String, Boolean>()
     private val pagerPages = HashMap<String, Int>()
 
     fun stack(key: String): List<BrowserDetail> = detailStacks[key] ?: emptyList()
     fun saveStack(key: String, stack: List<BrowserDetail>) { detailStacks[key] = stack }
-
-    fun fromCoverFlow(key: String): Boolean = coverFlowFlags[key] == true
-    fun saveFromCoverFlow(key: String, on: Boolean) { coverFlowFlags[key] = on }
 
     fun page(key: String): Int = pagerPages[key] ?: 0
     fun savePage(key: String, page: Int) { pagerPages[key] = page }
@@ -516,58 +500,16 @@ private fun SourceBrowser(
     val scope = rememberCoroutineScope()
     // 初值从进程内缓存恢复：进入播放页（NavHost 会销毁本页）再返回时，仍停在原来的详情层。
     var detailStack by remember(data) { mutableStateOf(BrowserMemory.stack(memoryKey)) }
-    // 标记当前详情是否由「Cover Flow 点击」进入：若是，则专辑列表也走全屏沉浸。
-    var detailFromCoverFlow by remember(data) { mutableStateOf(BrowserMemory.fromCoverFlow(memoryKey)) }
-    LaunchedEffect(detailStack, detailFromCoverFlow) {
-        BrowserMemory.saveStack(memoryKey, detailStack)
-        BrowserMemory.saveFromCoverFlow(memoryKey, detailFromCoverFlow)
-    }
+    LaunchedEffect(detailStack) { BrowserMemory.saveStack(memoryKey, detailStack) }
 
     // 列表滚动位置：进入详情时列表会被移出 composition（remember 状态随之丢失），
     // 用 SaveableStateHolder 按「根列表 / 每个 Tab / 每层详情」分别保存，
     // 返回时精确恢复到原来的滚动位置，而不是从第一项重新开始。
     val stateHolder = rememberSaveableStateHolder()
 
-    // 把 Cover Flow 的滚动状态提升到 SourceBrowser：进入专辑再返回时，
-    // 因为 SourceBrowser 本身不卸载，滚动位置会被保留，停在之前选中的专辑而非从头开始。
-    val cfListState = rememberLazyListState()
-
-    // 「正在播放」卡片开关：横屏封面流内点按触发，从底部弹出；返回手势缩回原位置。
-    var showNowPlaying by remember { mutableStateOf(false) }
-
-    // 横屏：整页切换为 iOS 风格的专辑 Cover Flow（可左右滑动、3D 透视），
-    // 点击居中封面进入专辑详情；右上角可切回普通列表。
-    val isLandscape =
-        LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    var forceList by rememberSaveable(data) { mutableStateOf(false) }
-    // 回到竖屏时清掉「强制列表」，下次横屏仍进入 Cover Flow
-    LaunchedEffect(isLandscape) { if (!isLandscape) forceList = false }
-
-    // 详情栈清空即退出「由 Cover Flow 进入」的全屏上下文
-    LaunchedEffect(detailStack.isEmpty()) {
-        if (detailStack.isEmpty()) detailFromCoverFlow = false
-    }
-
-    // 进入 Cover Flow / 由其打开的专辑列表 → 全屏沉浸（隐藏底部导航、MiniPlayer 与系统栏）。
-    val cfActive = isLandscape && !forceList && detailStack.isEmpty()
-    val fullScreen = cfActive || (detailFromCoverFlow && detailStack.isNotEmpty())
-    DisposableEffect(fullScreen) {
-        app.fullScreenMode.value = fullScreen
-        onDispose { app.fullScreenMode.value = false }
-    }
-
-    // 返回手势优先级（高→低）：①关闭「正在播放」卡 ②退出详情栈 ③退出 Cover Flow。
-    // 关键：Cover Flow 自身也作为一层「可返回」，否则在封面流按返回会直接退到桌面，
-    // 而不是回到普通列表视图（用户期望的「退出 coverflow」）。
-    BackHandler(enabled = showNowPlaying || detailStack.isNotEmpty() || cfActive) {
-        when {
-            showNowPlaying -> showNowPlaying = false
-            detailStack.isNotEmpty() -> {
-                detailStack = detailStack.dropLast(1)
-                if (detailStack.isEmpty()) detailFromCoverFlow = false
-            }
-            cfActive -> forceList = true
-        }
+    // App 锁死竖屏：SourceBrowser 只保留普通列表 + 详情层，横屏 CoverFlow 相关逻辑已移除。
+    BackHandler(enabled = detailStack.isNotEmpty()) {
+        detailStack = detailStack.dropLast(1)
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -577,7 +519,7 @@ private fun SourceBrowser(
         val warn = statusLine != null && listOf("⚠", "失败", "认证", "上限", "限流", "未连接")
             .any { statusLine.contains(it) }
         val showText = scanning || warn
-        if (!fullScreen && showText && statusLine != null) {
+        if (showText && statusLine != null) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -623,28 +565,10 @@ private fun SourceBrowser(
                         data = data,
                         stack = detailStack,
                         onPush = { detailStack = detailStack + it },
-                        onPop = {
-                            detailStack = detailStack.dropLast(1)
-                            if (detailStack.isEmpty()) detailFromCoverFlow = false
-                        }
+                        onPop = { detailStack = detailStack.dropLast(1) }
                     )
                 }
             }
-        } else if (cfActive) {
-            CoverFlow(
-                data = data,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                listState = cfListState,
-                showNowPlaying = showNowPlaying,
-                onOpenNowPlaying = { showNowPlaying = true },
-                onCloseNowPlaying = { showNowPlaying = false },
-                onOpenPlayer = { navController.navigate("player") },
-                onOpen = {
-                    detailFromCoverFlow = true
-                    detailStack = listOf(BrowserDetail.Album(it))
-                },
-                onShowList = { forceList = true }
-            )
         } else {
             // 根列表整体套一个 SaveableStateProvider：进入详情时这块会被移出 composition，
             // 没有它的话所有 Tab 的 LazyListState 都会丢，返回后从第一项重新开始。
@@ -657,7 +581,6 @@ private fun SourceBrowser(
                                     selected = pagerState.currentPage == index,
                                     onClick = {
                                         detailStack = emptyList()
-                                        detailFromCoverFlow = false
                                         scope.launch { pagerState.animateScrollToPage(index) }
                                     }
                                 ) { Text(label, modifier = Modifier.padding(8.dp)) }
@@ -684,7 +607,7 @@ private fun SourceBrowser(
                                     ) {
                                         detailStack = listOf(BrowserDetail.Playlist(it))
                                     }
-                                    "albums" -> EntriesTab(data.loadAlbums, "没有专辑") {
+                                    "albums" -> AlbumCoverFlowTab(data.loadAlbums, "没有专辑") {
                                         detailStack = listOf(BrowserDetail.Album(it))
                                     }
                                     // 只有「当前停留页」才允许文件夹层级接管返回手势，
@@ -709,442 +632,184 @@ private fun SourceBrowser(
     }
 }
 
+
 /**
- * iOS 风格的 Cover Flow（横屏专用）：
- * 专辑封面在中间 1:1 正对用户，左右两侧按距离做 Y 轴旋转 / 缩小 / 淡出 / 向中心聚拢，
- * 形成经典的「唱片架」透视；滑动带吸附，点击居中封面进入专辑详情。
+ * 竖屏「专辑」Tab 的 Cover Flow：与横屏全屏版共用同一套 3D 唱片架视觉
+ *（居中正对、两侧绕 Y 轴旋转 / 缩小 / 淡出 / 向中心聚拢），但作为普通 Tab 内容嵌在 Pager 里，
+ * 去掉全屏沉浸 / 正在播放卡等横屏专属元素。左右滑动切专辑，点击居中封面翻面进详情；
+ * 封面下方显示当前专辑名与副标题。
  */
 @Composable
-private fun CoverFlow(
-    data: SourceBrowserData,
-    modifier: Modifier = Modifier,
-    listState: LazyListState,
-    showNowPlaying: Boolean,
-    onOpenNowPlaying: () -> Unit,
-    onCloseNowPlaying: () -> Unit,
-    onOpenPlayer: () -> Unit,
-    onOpen: (SourceEntry) -> Unit,
-    onShowList: () -> Unit
+private fun AlbumCoverFlowTab(
+    loader: suspend () -> List<SourceEntry>,
+    emptyText: String,
+    onOpen: (SourceEntry) -> Unit
 ) {
-    var albums by remember(data) { mutableStateOf<List<SourceEntry>>(emptyList()) }
-    var loading by remember(data) { mutableStateOf(true) }
-    var error by remember(data) { mutableStateOf<String?>(null) }
+    var albums by remember(loader) { mutableStateOf<List<SourceEntry>>(emptyList()) }
+    var loading by remember(loader) { mutableStateOf(true) }
+    var error by remember(loader) { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(data) {
-        loading = true; error = null
-        runCatching { data.loadAlbums() }
+    LaunchedEffect(loader) {
+        loading = true
+        error = null
+        runCatching { loader() }
             .onSuccess { albums = it }
             .onFailure { error = CrashLogger.describe("加载失败", it) }
         loading = false
     }
 
-    if (loading) {
-        Box(modifier, contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-        return
-    }
-    if (error != null) {
-        Box(modifier, contentAlignment = Alignment.Center) { InlineError(error!!) }
-        return
-    }
-    if (albums.isEmpty()) {
-        Box(modifier, contentAlignment = Alignment.Center) { EmptyHint("没有专辑") }
-        return
-    }
+    when {
+        loading -> LoadingRow()
+        error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { InlineError(error!!) }
+        albums.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyHint(emptyText) }
+        else -> {
+            val listState = rememberLazyListState()
+            val scope = rememberCoroutineScope()
 
-    // 正在播放状态（用于底部「当前播放」入口与弹出卡片）。
-    // 刻意不在这一层订阅 position：进度每 500ms 变一次，在这里读会让整个 Cover Flow
-    //（含所有可见封面项的 graphicsLayer）跟着重组，横屏滑动会掉帧。进度下沉到 SheetProgress。
-    val queue by PlayerController.queue.collectAsState()
-    val curIdx by PlayerController.currentIndex.collectAsState()
-    val isPlaying by PlayerController.isPlaying.collectAsState()
-    val currentTrack = if (curIdx in queue.indices) queue[curIdx] else null
-    val npProgress by animateFloatAsState(
-        targetValue = if (showNowPlaying) 1f else 0f,
-        animationSpec = tween(durationMillis = 320)
-    )
-
-    val scope = rememberCoroutineScope()
-
-    // 翻转动画：点击居中封面后，该封面绕 Y 轴翻转 180°，动画结束后打开专辑列表。
-    var flippingIndex by remember { mutableStateOf<Int?>(null) }
-    val flip by animateFloatAsState(
-        targetValue = if (flippingIndex != null) 1f else 0f,
-        animationSpec = tween(durationMillis = 520),
-        finishedListener = { _ ->
-            val idx = flippingIndex
-            if (idx != null) {
-                flippingIndex = null
-                onOpen(albums[idx])
+            // 当前居中项：决定「点击是否进入」与底部信息栏，避免误点侧面封面就进详情。
+            val currentIndex by remember(albums) {
+                derivedStateOf {
+                    val info = listState.layoutInfo
+                    val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+                    info.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2f - center) }?.index ?: 0
+                }
             }
-        }
-    )
+            val currentAlbum = albums.getOrNull(currentIndex)
 
-    // 当前居中项：用于「点击是否进入」
-    val currentIndex by remember(albums) {
-        derivedStateOf {
-            val info = listState.layoutInfo
-            val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
-            info.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2f - center) }?.index ?: 0
-        }
-    }
-    val bg = Brush.verticalGradient(
-        listOf(
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-            MaterialTheme.colorScheme.surface
-        )
-    )
+            // 翻转动画：点击居中封面后绕 Y 轴翻 180°，结束再打开专辑详情。
+            var flippingIndex by remember { mutableStateOf<Int?>(null) }
+            val flip by animateFloatAsState(
+                targetValue = if (flippingIndex != null) 1f else 0f,
+                animationSpec = tween(durationMillis = 480),
+                finishedListener = { _ ->
+                    val idx = flippingIndex
+                    if (idx != null) {
+                        flippingIndex = null
+                        onOpen(albums[idx])
+                    }
+                }
+            )
 
-    BoxWithConstraints(modifier.background(bg)) {
-        // 全屏沉浸：封面铺满可用区域，不再叠加底部专辑信息栏
-        val availW = maxWidth
-        val availH = maxHeight
-        val card = minOf(availH * 0.62f, availW * 0.42f)
-        val itemW = card * 0.82f
-        LazyRow(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = (availW - itemW) / 2),
-            verticalAlignment = Alignment.CenterVertically,
-            // 翻转过程中锁定滑动，保证翻面动画完整播放
-            userScrollEnabled = flippingIndex == null
-        ) {
-            itemsIndexed(albums, key = { i, e -> "${e.id}#$i" }) { i, e ->
-                Box(
-                    Modifier.width(itemW).height(card * 1.3f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        Modifier
-                            .size(card)
-                            .graphicsLayer {
-                                if (i == flippingIndex) {
-                                    // 翻转中：用动画进度驱动 Y 轴旋转，呈现「翻面」效果
-                                    rotationY = flip * 180f
-                                    scaleX = 1f
-                                    scaleY = 1f
-                                    alpha = 1f
-                                    cameraDistance = 14f * density
-                                } else {
-                                    val info = listState.layoutInfo
-                                    val vi = info.visibleItemsInfo.firstOrNull { it.index == i }
-                                    if (vi != null) {
-                                        val centerPx =
-                                            (info.viewportStartOffset + info.viewportEndOffset) / 2f
-                                        val d = (vi.offset + vi.size / 2f) - centerPx
-                                        // 以「一个卡片宽」为归一化单位，超出后收敛到 ±1
-                                        val norm = (d / (card.toPx() * 1.15f)).coerceIn(-1f, 1f)
-                                        rotationY = -norm * 46f
-                                        val s = 1f - abs(norm) * 0.26f
-                                        scaleX = s
-                                        scaleY = s
-                                        alpha = (1f - abs(norm) * 0.55f).coerceIn(0.12f, 1f)
-                                        // 向中心轻推，营造封面互相叠靠的效果
-                                        translationX = -d * 0.16f
-                                        cameraDistance = 14f * density
+            val bg = Brush.verticalGradient(
+                listOf(
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    MaterialTheme.colorScheme.surface
+                )
+            )
+
+            BoxWithConstraints(Modifier.fillMaxSize().background(bg)) {
+                val availW = maxWidth
+                val availH = maxHeight
+                // 竖屏宽度较窄，以宽度为限制；留出底部信息栏高度。
+                val card = minOf(availW * 0.66f, availH * 0.5f)
+                val itemW = card * 0.84f
+
+                Column(Modifier.fillMaxSize()) {
+                    LazyRow(
+                        state = listState,
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = (availW - itemW) / 2),
+                        verticalAlignment = Alignment.CenterVertically,
+                        // 翻转过程中锁定滑动，保证翻面动画完整播放。
+                        userScrollEnabled = flippingIndex == null
+                    ) {
+                        itemsIndexed(albums, key = { i, e -> "${e.id}#$i" }) { i, e ->
+                            Box(
+                                Modifier.width(itemW).height(card * 1.18f),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    Modifier
+                                        .size(card)
+                                        .graphicsLayer {
+                                            if (i == flippingIndex) {
+                                                // 翻转中：动画进度驱动 Y 轴旋转，呈现翻面效果。
+                                                rotationY = flip * 180f
+                                                scaleX = 1f
+                                                scaleY = 1f
+                                                alpha = 1f
+                                                cameraDistance = 14f * density
+                                            } else {
+                                                val info = listState.layoutInfo
+                                                val vi = info.visibleItemsInfo.firstOrNull { it.index == i }
+                                                if (vi != null) {
+                                                    val centerPx =
+                                                        (info.viewportStartOffset + info.viewportEndOffset) / 2f
+                                                    val d = (vi.offset + vi.size / 2f) - centerPx
+                                                    val norm = (d / (card.toPx() * 1.15f)).coerceIn(-1f, 1f)
+                                                    rotationY = -norm * 46f
+                                                    val s = 1f - abs(norm) * 0.26f
+                                                    scaleX = s
+                                                    scaleY = s
+                                                    alpha = (1f - abs(norm) * 0.55f).coerceIn(0.12f, 1f)
+                                                    translationX = -d * 0.16f
+                                                    cameraDistance = 14f * density
+                                                }
+                                            }
+                                        }
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable {
+                                            if (currentIndex == i) {
+                                                // 居中封面：触发翻面动画，结束后进专辑详情。
+                                                if (flippingIndex == null) flippingIndex = i
+                                            } else scope.launch { listState.animateScrollToItem(i) }
+                                        }
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .fillMaxSize()
+                                            .background(
+                                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                                RoundedCornerShape(10.dp)
+                                            )
+                                    ) {
+                                        CoverImage(
+                                            e.coverUrl,
+                                            Modifier.fillMaxSize(),
+                                            embeddedAudioUrl = e.embeddedAudioUrl,
+                                            contentScale = ContentScale.Fit,
+                                            shape = RoundedCornerShape(10.dp)
+                                        )
                                     }
                                 }
                             }
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable {
-                                if (currentIndex == i) {
-                                    // 点击居中封面：触发翻转动画，结束后打开专辑列表
-                                    if (flippingIndex == null) flippingIndex = i
-                                } else scope.launch { listState.animateScrollToItem(i) }
-                            }
-                    ) {
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(
-                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                                    RoundedCornerShape(10.dp)
-                                )
-                        ) {
-                            CoverImage(
-                                e.coverUrl,
-                                Modifier.fillMaxSize(),
-                                embeddedAudioUrl = e.embeddedAudioUrl,
-                                // 完整展示整张封面，不裁切
-                                contentScale = ContentScale.Fit,
-                                shape = RoundedCornerShape(10.dp)
-                            )
                         }
                     }
-                }
-            }
-        }
 
-        // 右上角：切回普通列表视图（竖屏时自动回到列表）
-        IconButton(
-            onClick = onShowList,
-            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)
-        ) {
-            Icon(Icons.Default.ViewList, contentDescription = "切换列表视图")
-        }
-
-        // 底部「当前播放」入口：点按从底部弹出卡片
-        NowPlayingPill(
-            track = currentTrack,
-            isPlaying = isPlaying,
-            onClick = onOpenNowPlaying,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp)
-        )
-
-        // 从底部滑入的「正在播放」卡片（返回手势缩回原位置）
-        NowPlayingSheet(
-            visible = showNowPlaying,
-            progress = npProgress,
-            track = currentTrack,
-            queue = queue,
-            currentIndex = curIdx,
-            isPlaying = isPlaying,
-            onClose = onCloseNowPlaying,
-            onOpenPlayer = onOpenPlayer,
-            onPlayPause = { if (isPlaying) PlayerController.pause() else PlayerController.play() },
-            onNext = { PlayerController.next() },
-            onPrev = { PlayerController.previous() },
-            onSeek = { PlayerController.seekTo(it) },
-            onSelect = { PlayerController.playTracks(queue, it) }
-        )
-    }
-}
-
-/**
- * 横屏 Cover Flow 底部的「当前播放」入口：胶囊按钮，点按从底部弹出正在播放卡片。
- * 没有正在播放的歌曲时也显示，便于从封面流直接进入播放控制。
- */
-/**
- * 卡片内的进度区：自己订阅播放进度，500ms 的刷新只影响这一小块，
- * 不会牵动整张「正在播放」卡片（含播放队列列表）重组。
- */
-@Composable
-private fun SheetProgress(onSeek: (Long) -> Unit) {
-    val position by PlayerController.position.collectAsState()
-    val duration by PlayerController.duration.collectAsState()
-    val posSec = (position / 1000).toInt().coerceAtLeast(0)
-    val durSec = (duration / 1000).toInt().coerceAtLeast(1)
-    Slider(
-        value = posSec.toFloat().coerceIn(0f, durSec.toFloat()),
-        onValueChange = { onSeek((it * 1000).toLong()) },
-        valueRange = 0f..durSec.toFloat(),
-        modifier = Modifier.fillMaxWidth()
-    )
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(fmtTime(posSec), style = MaterialTheme.typography.labelSmall)
-        Text(fmtTime(durSec), style = MaterialTheme.typography.labelSmall)
-    }
-}
-
-@Composable
-private fun NowPlayingPill(
-    track: Track?,
-    isPlaying: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val label = track?.let { "${it.title} · ${it.artist}" } ?: "当前播放"
-    Box(
-        modifier
-            .clickable(onClick = onClick)
-            .background(
-                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
-                RoundedCornerShape(999.dp)
-            )
-            .padding(horizontal = 14.dp, vertical = 9.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                label,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 220.dp)
-            )
-        }
-    }
-}
-
-/**
- * 从底部滑入的「正在播放」卡片：封面 + 标题 + 进度 + 播放控制 + 打开播放页 + 播放队列。
- * progress∈[0,1] 驱动滑入/缩回动画；visible=false 且 progress≈0 时不参与组合。
- */
-@Composable
-private fun NowPlayingSheet(
-    visible: Boolean,
-    progress: Float,
-    track: Track?,
-    queue: List<Track>,
-    currentIndex: Int,
-    isPlaying: Boolean,
-    onClose: () -> Unit,
-    onOpenPlayer: () -> Unit,
-    onPlayPause: () -> Unit,
-    onNext: () -> Unit,
-    onPrev: () -> Unit,
-    onSeek: (Long) -> Unit,
-    onSelect: (Int) -> Unit
-) {
-    if (!visible && progress <= 0.001f) return
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val cardH = maxHeight * 0.82f
-        // 遮罩：随 progress 淡入，点按关闭卡片
-        Box(
-            Modifier
-                .fillMaxSize()
-                .graphicsLayer { alpha = progress * 0.5f }
-                .background(Color.Black)
-                .clickable(onClick = onClose)
-        )
-        // 卡片本体：底部对齐，按 progress 从下方滑入；缩回时回到原位置（屏幕下方）
-        Column(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(cardH)
-                .graphicsLayer {
-                    translationY = (1f - progress) * cardH.toPx()
-                    alpha = progress
-                    clip = true
-                    shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
-                }
-                .background(
-                    MaterialTheme.colorScheme.surfaceContainerHigh,
-                    RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
-                )
-                .padding(16.dp)
-        ) {
-            // 顶部手柄条
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Box(
-                    Modifier
-                        .size(width = 40.dp, height = 4.dp)
-                        .background(MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(2.dp))
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-            if (track == null) {
-                Text(
-                    "尚未播放任何歌曲",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CoverImage(
-                        track.coverUrl,
-                        Modifier.size(64.dp),
-                        embeddedAudioUrl = track.embeddedAudioUrl,
-                        contentScale = ContentScale.Crop,
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
+                    // 底部：当前专辑信息 + 操作提示。
+                    Column(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
                         Text(
-                            track.title,
+                            currentAlbum?.name.orEmpty(),
                             style = MaterialTheme.typography.titleMedium,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
                         )
                         Text(
-                            "${track.artist} · ${track.album}",
+                            currentAlbum?.subtitle.orEmpty(),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
                         )
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-                // 进度条 + 时间：单独订阅播放进度，避免整张卡片每 500ms 重组
-                SheetProgress(onSeek = onSeek)
-                Spacer(Modifier.height(8.dp))
-                // 播放控制
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onPrev) { Icon(Icons.Default.SkipPrevious, contentDescription = "上一首") }
-                    IconButton(onClick = onPlayPause) {
-                        Icon(
-                            if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = "播放/暂停",
-                            modifier = Modifier.size(32.dp)
+                        Text(
+                            "左右滑动切换 · 点击封面进专辑   ${currentIndex + 1}/${albums.size}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(top = 4.dp),
+                            textAlign = TextAlign.Center
                         )
-                    }
-                    IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, contentDescription = "下一首") }
-                }
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = onOpenPlayer, modifier = Modifier.fillMaxWidth()) { Text("打开播放页") }
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    "播放队列",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(4.dp))
-                // 队列（可滚动），点击任一首跳转到该首
-                LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = true)) {
-                    itemsIndexed(queue, key = { i, t -> "${t.id}#$i" }) { i, t ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { onSelect(i) }
-                                .padding(vertical = 8.dp, horizontal = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "${i + 1}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (i == currentIndex) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.width(24.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    t.title,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    color = if (i == currentIndex) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    t.artist,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            if (i == currentIndex) {
-                                Icon(
-                                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                        }
-                        HorizontalDivider()
                     }
                 }
             }
         }
     }
 }
+
 
 /** 秒 → m:ss */
 private fun fmtTime(sec: Int): String {

@@ -4,6 +4,279 @@
 
 <!-- 文末 compare 链接已指向实际 GitHub 仓库。 -->
 
+## [5.0.5] - 2026-11-20
+
+### 修复 · 玻璃磨砂不透明：blur 超标 + vibrancy 提亮（反编译库定位）
+- **现象**：真机截图设置页滚轮仍是一整块灰白磨砂盘、中心背景被糊掉，与「清透液态玻璃」相反。
+- **根因（反编译 backdrop 1.0.2 字节码逐项核实）**：滚轮 [GlassSurface] 与列表 [glassHighlight] 的 effect 参数严重超标——
+  - `blur(8dp)`：`blur` 直接调用 `RenderEffect.createBlurEffect(8dp,8dp)` 作用于**整个形状区域**，8dp 把整盘背景糊成毛玻璃（这是磨砂主因）。官方 `LiquidButton.kt` 示例仅 `blur(2dp)`。
+  - `vibrancy()`：固定 `colorControls(saturation=1.5)`，把背景提饱和到 1.5×，配合模糊呈油腻发白。
+  - `lens(28dp,40dp)`：折射高度/位移是官方 `lens(12dp,24dp)` 的 2 倍多，边缘大面积扭曲。
+  - 另核实 `drawBackdrop` 默认 HighLight/Shadow 的 alpha 均为 0（不画），`DefaultOnDrawBackdrop` 仅原样绘制采样内容、不铺底色——故灰白层与不透明感确由 blur+vibrancy 造成，与高光阴影无关。
+- **修复**：
+  - 滚轮：`blur 8dp → 1.5dp`、`lens 28/40 → 12/24`（官方配方）、**移除 vibrancy**；中心背景保持清晰，只在边缘由 lens 折射 + 色散。
+  - 选中项：`blur 3dp → 1dp`、`lens 6/11 → 5/10`、移除 vibrancy。
+  - 清理两处 vibrancy import 与过时注释。
+- **版本差异说明**：`blur` 在 API<31、`lens` 在 API<33 由库自动跳过（不崩）；Android 13+ 才有边缘折射，Android 12 为清透无折射盘——两版都不再磨砂。
+- **核验**：`assembleRelease --offline` 编译通过。
+
+## [5.0.4] - 2026-11-20
+
+### 清理 · 全项目去冗余：死 import / 未用依赖 / 死参数 / 过时注释
+- **死 import**：全量扫描 33 个源码文件，逐文件精确判定「符号仅在 import 行出现、正文零引用」的死 import（交叉验证排除 KDoc 链接与 `getValue/setValue` 属性委托），共删除 **57 个**，涉及 11 个文件（MainActivity 5、LibraryScreen 12、PlayerScreen 9、SettingsScreen 10、WheelHomeScreen 7、WheelSettingsScreen 5 等）。多为多轮 UI/玻璃迭代改版后遗留的旧引用。
+- **未用依赖**：删除 `androidx.media3:media3-exoplayer-dash:1.9.3`——全项目无 `.mpd`/DASH 播放，媒体项均为普通 URI（`MediaItem.Builder().setUri`），`DefaultMediaSourceFactory` 按需要加载协议，普通音频播放不受影响。
+- **死参数**：删除 [GlassSurface] 的 `bare`（QWEA0 桥接时代的纯容器模式，无任何调用点传入）与 `forceDark`（函数体从未读取）两个参数，并同步移除唯一调用点 `ClickWheel` 的 `forceDark = dark` 实参与 `bare` 早退分支。
+- **过时注释**：清理仍描述已移除旧库/旧方案的文档——[GlassBlurConfig] 类注释的「Haze/RenderEffect」「全部 Canvas 绘制不采样背景」矛盾说法、[MusicBoxApp] 开关的「Canvas 光学层」「真毛玻璃开关」、[MainActivity]/[WheelSettingsScreen]/[PlayerScreen] 的「Canvas 高光不采样」、自降级日志的「退回 Canvas 稳定方案」，改为与当前 backdrop 采样折射方案一致的准确描述；移除 [MusicBoxApp] 中一段脱离主体的孤立陈旧 KDoc。
+- **核验**：`assembleRelease --offline` 编译通过；清理后复扫死 import **0 残留**、旧库名（QWEA0/Haze/JitPack）源码与配置 **0 处**、死参数 **0 处**；APK 内 native so 仅剩 FFmpeg/decent-USB/datastore/graphics-path 等当前功能所需，无旧库 `libnativegauss.so`。纯清理，不改功能。
+
+## [5.0.3] - 2026-11-20
+
+### 修复 · 滑动残留多框：选中高亮改为离散控制
+- **现象**：v5.0.2 快速滑动列表后，多个相邻项同时残留玻璃框（截图「文件夹/搜索/设置」）。
+- **根因**：`glassHighlight` 用 `animateFloatAsState(tween 180ms)` 做淡入淡出；滑动时 selected 索引连续跳变，多个 item 的 `a` 同时处于 (0,1) 渐变中间态，只要 `a>0` 就挂着 `drawBackdrop`。而 backdrop 是坐标依赖的，滚出视口的渐变项采到屏幕边缘背景、各自成框，叠加成一串残留。
+- **修复**：选中是离散状态，**移除淡入淡出动画**——`selected=true` 才挂 `drawBackdrop`、`false` 立即返回原 modifier（连透明 background 都不挂）。任何时刻恰好只有 1 个 item 采样背景，从根上消除中间态残留。
+- **核验**：`assembleRelease --offline` 通过；版本 5.0.3（code 140）。
+
+## [5.0.2] - 2026-11-20
+
+### 修复 · 真机三点反馈：滚轮阴影 / 选中方案统一 / 移动黑框
+- **① 滚轮外圈阴影**：v5.0.1 滚轮外那圈深色阴影来自 [ClickWheel] 自绘的 Canvas 环形投影（`shadowA=0.34`），与 backdrop 玻璃叠加显得脏。本次删除该 Canvas 投影层，滚轮只保留 backdrop lens 折射本身的光学边缘，干净通透。
+  - 附带核实：库默认 `Highlight.Default` / `Shadow.Default` 的 alpha 均为 0（反编译字节码确认），并不绘制高光/阴影，故阴影确为自绘层，删除无副作用。
+- **② 列表选中项方案统一**：此前选中项走 `glassHighlight → liquidGlassLayer → drawLiquidGlass`（纯 Canvas 边缘描边，不采样背景），与滚轮的 backdrop 真折射观感不一致。本次改为与滚轮**同一套 backdrop 方案**：选中项采样正下方背景做 `vibrancy + blur + lens(色散)`，观感统一；同一时刻仅 1 项采样，性能安全。
+- **③ 移动残留黑框**：根因是旧 `drawLiquidGlass` 里的黑描边 `Color.Black.copy(alpha=0.32f)` 未随选中动画的 intensity 淡出，滚动/换选时残留成黑框。改用 backdrop 方案后不再画任何 Canvas 描边，黑框根除。
+- **核验**：`assembleRelease --offline` 通过；版本 5.0.2（code 139）。
+
+## [5.0.1] - 2026-11-20
+
+### 修复 · v5.0.0「没有任何变化」：滚轮真正接上 lens 折射
+- **根因（源码级核实）**：v5.0.0 虽引入 backdrop 库，但滚轮 `effects` 只写了 `vibrancy() + blur(8f)`，**从未调用 `lens()`**——没有折射，观感自然与旧版透明圈无差别；且 `blur(8f)` 的 `8f` 是**像素**不是 dp（库的 blur 半径单位是 px，官方写法 `blur(8f.dp.toPx())`），8px≈2.7dp 几乎看不见。
+- **lens 为何当初被绕开**：反编译 `LensKt.getCornerRadii` 只接受 `CornerBasedShape`，`CircleShape` 不满足会抛 `throwUnsupportedSDFException`——v5.0.0 为避崩干脆没接 lens，等于丢了液态玻璃的灵魂。
+- **本次修复**：
+  - 滚轮 shape 由 `CircleShape` 改为 `RoundedCornerShape(percent = 50)`——正方形轮体上视觉仍是正圆，但它是 CornerBasedShape，能提供圆角半径 → lens 折射生效；
+  - `effects` 严格按官方 `LiquidBottomTabs.kt` 配方：`vibrancy() → blur(8f.dp.toPx()) → lens(28f.dp.toPx(), 40f.dp.toPx(), chromaticAberration = true)`；
+  - lens 沿圆缘对背景做 SDF 折射位移 + 青/品红色散，盘外背景保持清晰——这是与「透明塑料圈」的本质区别；
+  - drawBackdrop 默认 Highlight/Shadow 由库绘制（字节码已核实），补充镜面高光与投影。
+- **API 兼容**：lens 需 API 33+、blur 需 API 31+，库内部 `if (SDK_INT < n) return` 自动跳过；低版本退回 Canvas 高光兜底，不崩。
+- **核验**：`assembleRelease --offline` 通过；版本 5.0.1（code 138）。
+
+## [5.0.0] - 2026-11-20
+
+### 重构 · 液态玻璃换用 Kyant0/backdrop（纯 Compose），依赖全量对齐
+- **为什么要重构**：QWEA0/Liquid-Glass-Android 是 View 体系库，靠 `View.draw()` 录制背景，与 Compose 的 RenderNode 录制机制结构性冲突——v4.9.0 启动即崩，v4.9.1 用纯 View 采样源止血后又出现「滚轮变成整张封面圆盘」（采样源喂了完整清晰封面）。继续打补丁等于让用户反复当测试员，故推倒重来。
+- **新库**：`io.github.kyant0:backdrop:1.0.2`——纯 Jetpack Compose 实现，用 `rememberLayerBackdrop` 录制背景、`Modifier.drawBackdrop` 采样，叠加 `vibrancy()`/`blur()` 与库内置 highlight/shadow。无 AndroidView 桥接，从根本上消除 RenderNode 重入崩溃。
+- **正确配对结构**：每个需玻璃的页面（播放页/设置页/主页/歌曲详情）顶层用 `rememberGlassBackdrop()` 创建 backdrop 并通过 `LocalGlassBackdrop` 下发；页面背景层 `glassBackdropSource()` 录制，滚轮 `GlassSurface(circular)` 从同一实例采样——兄弟配对，共享一个 backdrop。
+- **圆形滚轮**：CircleShape 不满足 lens 的 CornerBasedShape 约束，故只用 `blur(8f)` + vibrancy + 内置高光，避免 `throwUnsupportedSDFException`。API < 31 时库自动跳过 blur、仅保留高光，安全降级（已核对库源码 `if (SDK_INT < S) return`）。
+- **依赖对齐**（本次核心，先对齐再接功能）：AGP 8.5.2 → **8.6.1**（Compose 1.10 最低要求）；Kotlin / serialization / Compose Compiler 2.0.21 → **2.2.21**；Compose BOM 2024.10.01 → **2025.12.00**（Compose 1.10.0）；移除 QWEA0(JitPack) 与 Haze 全部依赖、移除 settings 的 jitpack 仓库、minSdk 回退到 23。
+- **清理**：删除 `ViewLiquidGlass.kt`、`BackdropSourceView.kt` 及所有 Haze/QWEA0 引用；自降级保险改为检测新库特征。dex 核验旧库残留 0 处。
+- **验证**：`compileReleaseKotlin` + `assembleRelease` 均通过；版本 5.0.0（code 137），backdrop 主类/drawBackdrop/effects/AGSL shader 均已进包。
+
+## [4.9.1] - 2026-11-20
+
+### 修复 · v4.9.0 启动即闪退：液态玻璃库采样源改为纯 View（保留 AGSL 折射）
+- **崩溃根因**：v4.9.0 把 `backdropSource` 指向 Compose 宿主 View（`android.R.id.content`）。库靠 `View.draw(canvas)` 实时录制背景做折射，采样时重放了正在录制的 Compose RenderNode，触发 `RenderNode.beginRecording` 二次重入 → `IllegalStateException: Recording currently in progress`，一进界面必崩（栈：`BackdropCapture.drawContent → AndroidComposeView.dispatchDraw → GraphicsLayerV29.record → beginRecording`）。这正是库作者写明「别用于 Compose」的底层原因。
+- **修复（不放弃折射）**：新增 [BackdropSourceView]——叶子 View，`onDraw` 只 `drawBitmap` 当前封面、INVISIBLE 仅作像素来源、无任何 Compose 子节点。桥接层在纯 View `FrameLayout` 里放「采样源 + 玻璃」这对兄弟，`glass.backdropSource = 采样源`（库 `isValidBackdropSource` 只禁自身/后代，兄弟合法）。采样路径变为 `BackdropCapture → BackdropSourceView.draw → drawBitmap`，全程不碰 Compose RenderNode，根治重入，同时保留 AGSL SDF 透镜折射/色散/重力高光。
+- **封面来源**：桥接层订阅 `PlayerController.currentIndex`，切歌时重新 `rememberCoverBitmap` 并把 Bitmap 喂给采样源（FrameLayout.update），折射内容随当前封面更新。关闭自适应染色（`enableAdaptiveTint=false`）避免亮度计额外采样与染色回退。
+- **崩溃自降级保险**：若上次运行仍因该库崩溃（日志含 `com.example.liquidglass` / `Recording currently in progress` / `BackdropCapture`），本次启动强制关闭玻璃并清除崩溃标志（一次性，不写回偏好），退回 Canvas 稳定方案，杜绝反复闪退循环。
+- **核验**：Kotlin 编译 + release 打包通过；版本号 4.9.1（code 136）；AGSL shader、桥接类、BackdropSourceView、自降级符号、两个 ABI 的 native so 均已进 dex/包。
+
+## [4.9.0] - 2026-11-20
+
+### 重建 · 改用 QWEA0/Liquid-Glass-Android：AGSL 真透镜折射（用户指定库）
+- **背景**：v4.7.x 纯 Canvas、v4.8.0 Haze 背景模糊均未达「Apple 液态玻璃」观感，用户给出目标库并要求借助其实现。
+- **方案**：引入 `com.github.QWEA0:liquidglass:v2.0.11`，用 `AndroidView` 把 `LiquidGlassView` 桥接进 Compose 滚轮底盘，图标文字仍由 Compose 叠加（GlassSurface 新增 `bare` 纯容器模式，避免两层玻璃叠加）。
+- **真玻璃管线**：API 33+ 走 AGSL RuntimeShader 单 pass 透镜——实时圆角矩形 SDF 折射、物理色散（三通道沿法线）、重力传感器高光、自适应染色；24–32 走 C++/NEON 经典管线（模糊+色差）自动降级，不崩。
+- **接入要点**：`cornerRadius=999f` 圆形、`material=CLEAR`（通透不磨砂）、`enableDynamicBackground=true`（背景/滚轮会动，否则折射冻结）、`enableSensorHighlight=true`、`enablePressEffect=false`（手势交给上层 Compose）、`backdropSource=content root`（采整屏含封面）。
+- **依赖对齐**：minSdk 23→24（库要求）；加 JitPack 仓库；native so（arm64-v8a / armeabi-v7a libnativegauss.so）已打进包。
+- **开关**：沿用「液态玻璃」Toggle，关闭时不挂载 View 玻璃、退回 Canvas 窄环高光，零开销。
+- **核验**：aapt 版本 4.9.0/code 135；dex 命中 LiquidGlassView / GlassLensRenderer / AGSL shader(`uniform shader content`) / SDF(`sdRoundedBox4`) / 桥接封装；两个 ABI 的 native so 均在。
+- **待真机确认**：折射观感与滚动性能（AGSL 需 API 33+）、重力高光是否随倾斜移动。
+
+## [4.8.0] - 2026-11-20
+
+### 重建 · 真玻璃（背景局部采样）回归，解决 Canvas 方案「越改越假」
+- **根本认知**：v4.7.x 用纯 Canvas 画光学高光，无法采样背景，透明盘叠在花色封面上永远像「塑料圈」——用户连续反馈「太假 / 越来越差」。真玻璃必须用背景局部采样：玻璃盘内背景被柔化、盘外保持清晰。本版重新引入 Haze。
+- **Haze 1.0.0 正确接入**（此前失败均因 API 用错，本版逐条从字节码+官方文档核实）：
+  - 依赖 `dev.chrisbanes.haze:haze-android:1.0.0`（Kotlin 2.0.21 / Compose 1.7.x 已对齐，根治 0.7.3 的 ABI 崩溃）；
+  - `remember { HazeState() }`——1.0.0 **没有** `rememberHazeState()`；
+  - `Modifier.haze(state)` **单参**——1.0.0 把 style 从 haze 移除（此前双参写法即编译失败根因）；
+  - `Modifier.hazeChild(state, shape, style)` 用 `HazeDefaults.style(backgroundColor=Transparent, tint=White 0.04, blurRadius=16dp, noiseFactor=0.12)`——低 alpha tint，杜绝惨白。
+- **兄弟结构**：AppRoot 全局 provide 单个 `LocalHazeState`；各页面背景层用 `hazeBackdrop()` 注册采样源（设置/首页/播放/歌曲详情）；滚轮 `GlassSurface(circular=true)` 挂 hazeChild。haze 与 hazeChild 分处兄弟分支，规避「互为祖先」闪退。
+- **Canvas 降级为配角**：`drawWheelGlass` 只保留窄环菲涅尔亮线 + 顶部高光弧 + 色散，叠在 haze 柔化层之上；不再用大块白渐变填充。开关关闭时 hazeBackdrop/hazeChild 都不挂载，零采样开销。
+- **性能**：只给固定的滚轮做背景采样，列表项仍用轻量 Canvas 高光，不逐行采样。
+- 版本号 4.8.0（code 134）。
+
+## [4.7.2] - 2026-11-20
+
+### 优化 · 圆形滚轮玻璃质感（解决「太假」）
+- **问题**：v4.7.1 真机截图反馈——滚轮外圈是一条又宽又硬、末端突断的灰白弧，中心还被投影盖出黑斑，整体像刷上去的塑料圈。
+- **根因**：
+  - 滚轮沿用卡片的通用绘制，边缘带宽度按「短边×13%」取值，直径 ~340dp 的圆盘算出 ~44dp 宽灰带；
+  - 高光用径向渐变聚光左上，末端硬切；
+  - 投影是覆盖整个圆的径向黑渐变，透明盘中心被盖成黑斑。
+- **修正**：新增圆形滚轮专用绘制 `drawWheelGlass` / `liquidWheelLayer`，`GlassSurface(circular = true)` 切换：
+  - **窄环**：环宽固定为 `min(r×8.5%, 26dp)` 并封顶，杜绝宽灰带；
+  - **镜面高光弧**：只在顶部 200°~340° 一段，用一串短弧 + `sin` 包络让两端自然淡入淡出，另叠一道更细的核心亮线，有锐利边；
+  - **菲涅尔亮线**：整圈细边，上缘最亮、底部一道 bounce；
+  - **内缘暗线 + 青→品红色散**勾出玻璃厚度，中心零绘制、背景全透；
+  - **投影改为环形**：阴影集中在轮子外缘，中心完全透明，不再盖黑背景。
+- 卡片 / Dock / 列表选中项仍用通用光学层，不受影响。版本号 4.7.2（code 133）。
+
+## [4.7.1] - 2026-11-20
+
+### 修复 · 液态玻璃中心透明化（解决「磨砂灰盘」）
+- **问题**：v4.7.0 真机截图反馈——滚轮/列表选中项仍是**不透明灰色磨砂盘**，看不到背后背景，与 Apple 液态玻璃「透明」观感相反。
+- **根因**：`drawLiquidGlass` 在**整个玻璃区域**叠了 4 层白色渐变——中心径向白底(0.09) + 顶部白幕(0.34) + `Plus` 模式高光圈(0.5) + 底部反光(0.16)。这些叠加成一层白灰雾，把中心糊成磨砂面。方向完全错了。
+- **修正**：重写光学层，遵循 Liquid Glass 正确原理——**中心完全透明、背景 100% 透出，实体感只来自轮廓边缘一圈「玻璃厚度」**：
+  - 删除中心所有填充渐变（径向白底 / 顶部白幕 / Plus 高光圈 / 底部反光）；
+  - `GlassSurface` 开启时底色改为 `Color.Transparent`，关闭时才回退半透明 tint；
+  - `glassHighlight` 选中项开启时底色归零，仅靠边缘光学层区分；
+  - 新增**内缘折射光带** + **顶面镜面高光弧**：用「粗描边 + clip 到形状内只留内侧一半」沿轮廓着色，宽度随短边缩放（13%），中心零绘制。
+  - 菲涅尔亮边 / 色散彩边 / 深色描边保留，构成完整边缘玻璃厚度。
+- **结果**：滚轮变成真正的透明玻璃盘（透出背景封面），选中项透亮，零采样零模糊开销，列表性能不受影响。
+- 版本号 4.7.1（code 132）。
+
+## [4.7.0] - 2026-11-20
+
+### 重构 · 从「毛玻璃」改为真正的 Apple 液态玻璃（Liquid Glass）
+- **方向修正**：前几版一直在调 backdrop blur（毛玻璃 / Haze），本质错误。Liquid Glass 的中心近乎清透，靠**光学高光**塑造实体玻璃感，而非模糊背景。本版彻底移除 Haze 依赖与整套采样管线。
+- **移除 Haze**：`build.gradle` 去掉 `dev.chrisbanes.haze`；MainActivity 去掉 HazeState/ProvideHazeState；四个 backdrop 去掉 `hazeBackdrop()`；GlassSurface/glassHighlight 去掉 `hazeChild`。根治 `haze/hazeChild` 层级约束闪退与滚动采样开销。
+- **Canvas 液态玻璃光学层**：滚轮 / Dock / 迷你播放器 / 列表选中项统一用 Canvas 直接绘制 Apple 五大光学特征——
+  - 顶部弧形**镜面高光**（液态玻璃灵魂，偏左上光斑）；
+  - **菲涅尔亮边**（上缘最亮、底部一道 bounce 反光）；
+  - **色散彩边**（左上青→品红 fringe，Plus 混合）；
+  - 内侧**折射亮带**；
+  - iOS27 新增的**深色描边**强化分区。
+  - 全部不采样背景、零模糊开销，任何深/浅背景都成立，列表选中项零模糊、安全。
+- **设置解耦**：「液态玻璃」开关（Canvas 光学层，全版本生效）与「背景模糊度」（封面图 `.blur()` 4 档）完全独立，各用各的持久化 key，开关不再重置背景模糊度。文案从「毛玻璃」全面改为「液态玻璃」。
+- **性能**：列表项不再有任何背景采样；v4.4.5 的卡死修复（缓存命中即返回 + 稳定 key）原样保留。
+
+## [4.6.4] - 2026-11-20
+
+### 修复 · 玻璃惨白 + 背景模糊度真正可调
+- **理解修正**：v4.6.3 把「毛玻璃强度」做成了玻璃盘自身的模糊半径档位，但用户要的是**背景封面图的模糊度**可调。现拆成两个独立设置：
+  - **毛玻璃**（开/关 Toggle）：控制 Haze 背景透视模糊是否挂载；
+  - **背景模糊度**（Choice 4 档）：清晰(0dp) / 轻(6dp) / 中(16dp，默认) / 重(32dp)，直接控制四个页面封面图的 `.blur()`，独立于毛玻璃开关（关玻璃时背景模糊仍生效）。
+- **惨白修复**（真机截图反馈）：确认 Haze 的 `backgroundColor` 是盖在模糊内容上的填充色，旧值 White 0.30 + tint 0.20 + 浅色主题 sheen White 0.5 三层叠白，把滚轮/选中条洗成不透明塑料板。
+  - `backgroundColor` 降到 White 0.05、`tint` 0.04；
+  - 毛玻璃开启时内部高光（sheen/rim）压到极淡，仅示意玻璃厚度；
+  - 列表选中条叠白从 0.12→0.05、描边 0.42→0.24。
+  - 现在玻璃盘主体是**透出来的模糊封面纹理**，而非白漆。
+- v4.4.5 卡死修复、兄弟结构（不闪退）、列表性能守护（弱档/关档不挂模糊）全部保留。
+
+## [4.6.3] - 2026-11-20
+
+### 新增 · 毛玻璃强度可调 + 列表选中模糊
+- **强度可调**：原「真毛玻璃」布尔开关改为 4 档 Choice——关 / 弱 / 中 / 强。设置页循环切换，状态栏提示当前档位及功耗含义。
+  - 档位通过 `GlassBlurConfig`（CompositionLocal）下发，统一控制滚轮 / Dock / 迷你播放器的 `blurRadius` 与提亮 alpha：
+    - 弱 12dp / 中 22dp / 强 36dp；0 档完全关闭（零模糊开销，退化为高光描边）。
+  - 持久化新增 `glass_blur_level`；旧 `glass_blur` 布尔自动迁移（开→中档、关→关）；备份/导入兼容两种字段。
+- **列表选中项毛玻璃**：`glassHighlight` 接入 hazeChild，选中行对背后清晰封面做真模糊 + 提亮，中选行呈现磨砂玻璃条。
+  - 仅**中/强档**启用（`listBlur`），弱档与关档不挂——为列表滚动性能留退路。
+  - 同一时刻仅 1 个选中项挂模糊；未选中项零成本。列表项与 backdrop 是兄弟分支，不违反 Haze「不能互为后代」约束。
+  - v4.4.5 稳定 key / 缓存命中即返回修复原样保留。
+- 低版本 Android（<12）自动降级为高光玻璃，不挂模糊。
+
+## [4.6.2] - 2026-11-20
+
+### 修复 · 毛玻璃「效果甚微」
+- **根因**：Haze 的 `hazeChild` 采样的是背景层合成结果，而旧版背景是 `blur(32~48dp)` 又叠 46% 黑蒙层——等于「把已经糊掉的暗图再糊一次」，玻璃盘融进背景，几乎看不出差别。
+- **采样源改造**：四个背景层（WheelBackdrop / CoverBackdrop / SettingsBackdrop / SongDetailBackdrop）拆成两层——
+  - **采样层**（挂 `haze`）：只放清晰封面，模糊从 32~48dp 降到 10dp，保留真实纹理；
+  - **暗蒙层**（采样层的兄弟节点）：主色调 + 上下暗化保留以保证白字可读，但**不进入 haze 采样**。
+  - 三者互为兄弟，滚轮 `hazeChild` 不在 haze 子树内，仍不触发 v4.6.0 的绘制期闪退。
+- **玻璃观感**：`HazeStyle` 底色从深色 `surfaceContainerHigh` 改为提亮型白色低透明（深 0.16 / 浅 0.34），tint 改白色，blurRadius 18→22dp——滚轮比周围明显更亮、更通透，而非纯色「塑料板子」。
+- 列表性能防护不变：列表选中态 `glassHighlight` 零模糊，v4.4.5 卡死修复未动。
+
+## [4.6.1] - 2026-11-20
+
+### 修复（启动即闪退）
+- **修复 `IllegalArgumentException: Layout nodes using Modifier.haze and Modifier.hazeChild can not be descendants of each other`**：v4.6.0 误把 `Modifier.haze` 挂在包住整个页面的根 Box 上，而滚轮 / Dock / 迷你播放器的 `hazeChild` 都在其子树内——Haze 硬性约束二者不能互为后代，绘制期检测 `contentDrawing` 为 true 直接抛异常闪退（真机启动即崩）。这也解释了 v4.4.7~4.4.9 历史上"切到全效档就崩"的根因。
+- **改为兄弟结构**：根不再挂 haze，只通过 `LocalHazeState` 下发同一个 HazeState；`Modifier.haze` 改挂在四个页面的**背景层**（WheelBackdrop / CoverBackdrop / SettingsBackdrop / SongDetailBackdrop），滚轮作为兄弟分支的组件挂 `hazeChild` 采样背景模糊。二者不再是祖先/后代关系，约束满足。模糊的真实内容（封面/红底）与高光观感均不变。
+
+## [4.6.0] - 2026-11-20
+
+### 新增（真毛玻璃，在对齐后的依赖基线上重新引入）
+- **滚轮 / Dock / 迷你播放器支持真背景模糊**：在 Kotlin 2.0.21 + Compose Compiler 2.0.21 + Haze 1.0.0 的对齐基线上重新引入毛玻璃。根容器用 `Modifier.haze` 捕获背景，仅对三个**固定不滚动**的玻璃组件（iPod 点击轮、底部 Dock、迷你播放器）挂 `hazeChild` 采样并模糊其背后真实内容，通透感明显强于 v4.4.6 的"塑料板"假高光。
+- **设置页新增「真毛玻璃」开关**（震动强度之后），默认开、持久化并纳入备份/导入；关心功耗或老机型可一键关，关后立即退回零模糊的高光描边玻璃。
+- **低版本自动降级**：仅 Android 12（API 31）+ 挂载 Haze 模糊管线，以下系统即使开关开也只显示高光玻璃，零额外开销。
+
+### 修复（针对历史崩溃点）
+- **根治 `backgroundColor not specified` 崩溃**：HazeStyle 显式传入不透明底色（`HazeDefaults.style(backgroundColor=实色, ...)`），不再漏配必填参数——这是 v4.4.8 切档崩溃的直接根因。
+- **根治 ABI 冲突崩溃**：Haze 1.0.0 用 Compose 1.7 / Kotlin 2.0.21 编译，与已对齐的项目依赖一致；并排除其 KMP 的 `org.jetbrains.compose.*` / `kotlinx` 传递依赖，避免两套 Compose 类冲突（v4.4.7 的 `AbstractMethodError` 根因）。
+
+### 性能守护（重点）
+- **列表选中态绝不套模糊**：歌曲 / 专辑 / 设置列表的选中高亮仍走轻量的 `glassHighlight`（半透明描边），完全不经过 Haze。这是守护滚动性能的关键——模糊只发生在固定的滚轮 / Dock / 迷你播放器，列表滚动不触发任何逐项模糊。
+- **卡死修复不被回退**：v4.4.5 的"缓存命中即返回 + 稳定 key + 大跨度瞬时定位"全部保留，本版没有触碰列表数据加载链路。
+
+## [4.5.0] - 2026-11-20
+
+### 变更（回到干净基线，为下一版毛玻璃做准备）
+- **彻底回退全部玻璃质感改动**：v4.4.6~v4.4.9 引入的玻璃档位、Haze 真模糊、设置页开关、备份/导入字段、冷启动恢复等全部撤销，界面回到 v4.4.5 的稳定观感（高光/描边/投影组件本身保留，但不再有档位与真模糊）。原因是全效档真机反复崩溃、观感又被反馈为"像塑料板子"，修复成本高于收益。
+- **仅保留依赖对齐升级**：Kotlin / Kotlin serialization / Compose Compiler 统一 2.0.21，Compose Compiler 改用独立插件 `org.jetbrains.kotlin.plugin.compose`，移除废弃的 `composeOptions`。这是官方匹配组合，作为下一版重新引入毛玻璃的干净起点——**先对齐依赖，再做功能**。
+- **功能范围**：v4.4.1~v4.4.5 的 CoverFlow 放大、播放页动画对齐、歌曲页再次进入卡死修复等全部保留；本版不含任何玻璃效果，真机不再有切换档位崩溃风险。
+
+> v4.4.6~v4.4.9 的玻璃尝试记录保留在下方作为历史，但相关代码已在本版全部撤销。
+
+## [4.4.9] - 2026-11-20
+
+### 修复
+- **依赖基线对齐（首要）**：按反馈把 Kotlin / Kotlin serialization / Compose Compiler 从 1.9.24 / 1.5.14 一次性对齐升级到 **2.0.21**（Haze 1.0.0 官方基线）。此前为迁就旧 Kotlin 混搭 Haze 0.7.3→1.0.0，连续出现 ABI 冲突与配置崩溃，根因是依赖未对齐就急于实现功能。Kotlin 2.x 起 Compose Compiler 独立为 `org.jetbrains.kotlin.plugin.compose` 插件，已移除旧 `composeOptions`。全工程（含 JNI 模块）在对齐后编译通过。
+- **修复切到「全效」玻璃档崩溃（v4.4.8 遗留）**：v4.4.8 虽解决 ABI 冲突，但 Haze 1.0.0 强制要求 `HazeStyle.backgroundColor` 为已指定颜色，原代码只设了 tint / blurRadius，运行时抛 `IllegalArgumentException: backgroundColor not specified`。现已补齐不透明底色（深色 / 浅色各取适配色），并把已废弃的 `hazeChild(shape=)` 改为推荐的 `clip(shape).hazeChild()` 写法。
+
+## [4.4.8] - 2026-11-20
+
+### 修复
+- **修复切到「全效」玻璃档即崩溃**：v4.4.7 用的 Haze 0.7.3 是按 Compose 1.6 编译的，其 `HazeChildNode` 实现了 `LayoutAwareModifierNode` 接口但没有 Compose 1.7 新增的 `onRemeasured` 方法，在项目的 Compose 1.7.3 运行时挂载 `hazeChild` 时抛 `AbstractMethodError` 崩溃。升级到 **Haze 1.0.0**（用 Compose 1.7 编译，其 Modifier Node 改用 `GlobalPositionAwareModifierNode`，不再实现该接口），从根上消除 ABI 冲突；实测 Kotlin 1.9.24 可读其 Kotlin 2.0.21 元数据，无需升级项目 Kotlin。已对 jar 全量扫描确认无任何类实现 `LayoutAwareModifierNode`。
+
+## [4.4.7] - 2026-11-20
+
+### 改进
+- **玻璃质感「全效」档改为真背景模糊**：v4.4.6 的全效档只是模糊组件自绘的柔光层，观感像塑料板、效果不明显。现接入 Haze 真毛玻璃库（0.7.3，最后一个兼容项目 Kotlin 1.9.24 的版本），根容器捕获背景，滚轮 / Dock / 迷你播放器的玻璃组件用 `hazeChild` 采样并模糊其**背后真实内容**，呈现通透的毛玻璃折射感。
+- **性能边界不变**：仅 FULL 档且 Android 12+ 才挂载 Haze 模糊管线；LITE / OFF 档完全不挂载，零成本。列表选中态始终不套模糊。低版本 Android 自动降级到 LITE 的高光参数。
+- 后台依赖已排除 Haze 的 KMP（Compose Multiplatform）的 ui/foundation，避免与项目 Jetpack Compose 类冲突。
+
+## [4.4.6] - 2026-11-20
+
+### 新增
+- **玻璃质感可调档位**：设置页新增「玻璃质感」一项（位于震动强度之后），中心键循环切换，全应用立即生效并持久化（备份 / 导入一并覆盖）：
+  - **关闭（扁平）**：收敛高光与描边、底色更实、投影减弱，接近原始扁平观感；
+  - **轻量（默认）**：现有高光 / 描边 / 厚度参数，零性能成本；
+  - **全效（真模糊）**：滚轮 / Dock / 迷你播放器等固定玻璃组件叠加真 RenderEffect 柔光模糊（Android 12+），低版本自动降级到轻量。参考液态玻璃图的通透观感。
+- 档位读取走全局快照 `GlassSettings.level`，不让列表每一项各自订阅状态流；滚动列表选中态即使全效档也只增强高光 / 厚度、**绝不套模糊**，守住刚修复的歌曲页滚动性能。
+
+## [4.4.5] - 2026-11-20
+
+### 修复
+- **再次修复「歌曲页滑动多行后退出、再次进入卡死无响应」**：上一版只把恢复位置的长距离滚动从动画改为瞬时，未触及真正的根因。真正原因是加载协程在**命中缓存后没有返回**——先用缓存（2185 首）显示并恢复到上次深层位置，随后又继续 `loadNode` 全量重拉 22 页，返回后用**全新的 list 对象二次整体替换** items；由于列表无稳定 key，导致 2185 行全部重新 diff + 组合，叠加每行的高亮动画与封面重新解码，主线程被拖垮而 ANR。现命中缓存后立即返回，不再二次拉取 / 二次替换；并为列表项加稳定 key 作二次防线。
+- **顺带修复 v4.4.4**：瞬时定位 + 稳定 key 一起，进入深层列表更快更稳。
+- **缓存失效策略**：列表缓存 key 现在绑定曲库 data 实例身份——曲库未变时命中缓存（不重复加载），重新扫描 / 切音源产生新实例时缓存自动失效重建，避免"命中即返回"导致曲库刷新后长期显示旧数据。
+
+## [4.4.4] - 2026-11-20
+
+### 修复
+- **修复「歌曲页滑动多行后退出、再次进入卡死无响应」**：歌曲列表会记住上次选中位置。此前再次进入时列表从顶部用 `animateScrollToItem` 一路动画滚到上次选中的第 N 首，2185 首的大列表沿途组合数百行并触发同等数量的网络封面加载，主线程测量 + 图片解码风暴导致 ANR。现改为：大跨度（恢复位置 / 切换层级）用 `scrollToItem` 瞬时定位，只有转轮逐格的小跨度才用平滑动画，iPod 手感不变且不再卡死。
+
+## [4.4.3] - 2026-11-20
+
+### 变更
+- **播放页切歌动画对齐专辑手感**：播放页封面的切歌动画由「一次性 240ms tween 翻页（55° + 大位移）」改为与专辑列表同一套**连续 3D 唱片架**——维护一个虚拟滚动位置用 spring 平滑追逐目标曲目，3D 参数（42° 翻转、0.28 缩放、14f 景深）与专辑完全一致。快速连转滚轮时目标连续更新、动画连续跟随，不再每次从 0 重翻、被反复打断。
+- **播放页滚轮切歌速度对齐专辑**：去掉滚轮切歌的 240ms 节流，与专辑一致——每格 18° 即切一首（一圈约 20 首），音效震动按 60ms 节流独立触发。音量 / 进度 / 歌词 / 队列等逐格场景不受影响。
+- **专辑 CoverFlow 封面放大**：竖屏专辑封面尺寸由「高 60% / 宽 56%」提到「高 68% / 宽 64%」，唱片架观感更饱满，两侧邻封仍正常露出。
+
+### 说明
+- 播放页虽改用与专辑相同的连续 3D 动画，但**相邻封面在边缘处透明度归零**——静止时屏幕上只有当前一张封面，不会像专辑列表那样左右漏出别的封面。
+
+## [4.4.2] - 2026-11-20
+
+### 修复
+- **专辑列表 CoverFlow 真正生效**：上一版（4.4.1）改在了未被调用的 `SourceBrowser.AlbumCoverFlowTab`（死代码），而本地/WebDAV/飞牛三种音源实际全部走 `WheelHome`，所以真机上看不到变化。本次改为在 `WheelHome` 的竖屏「专辑」层直接用 3D CoverFlow 唱片架展示——转轮/左右键切换封面、中心键或点击封面进专辑，3D 透视与滑动跟随均可用。
+- **锁死竖屏 + 移除横屏代码**：Manifest 增加 `screenOrientation="portrait"`，横放设备不再旋转；删除 `WheelHome` 横屏 CoverFlow 分支、`MainActivity` 横屏 NavHost 分支与横屏沉浸判断、以及 `SourceBrowser` 中整套横屏 CoverFlow 逻辑与组件（横屏专用 `CoverFlow`/正在播放卡等），代码与交互统一为竖屏。
+
+## [4.4.1] - 2026-11-20
+
+### 变更
+- **竖屏专辑列表改为 CoverFlow**：竖屏「专辑」Tab 由普通列表改为 iOS 风格 3D 唱片架——居中封面正对、两侧旋转/缩小/淡出/向中心聚拢，左右滑动切换、点击居中封面翻面进专辑详情，封面下方显示当前专辑名与进度。复用横屏 CoverFlow 的视觉逻辑并针对竖屏窄屏适配；横屏全屏 CoverFlow 不变。
+
 ## [4.4.0] - 2026-11-19
 
 ### 变更

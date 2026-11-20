@@ -9,15 +9,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -34,6 +31,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
@@ -52,7 +50,6 @@ import androidx.compose.material.icons.filled.SaveAs
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -67,7 +64,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -94,6 +90,9 @@ import com.aipod.ui.components.coverCacheSizeBytes
 import com.aipod.ui.components.fadeEdges
 import com.aipod.ui.components.fadeInList
 import com.aipod.ui.components.glassHighlight
+import com.aipod.ui.components.glassBackdropSource
+import com.aipod.ui.components.rememberGlassBackdrop
+import com.aipod.ui.components.LocalGlassBackdrop
 import com.aipod.ui.components.rememberCoverBitmap
 import com.aipod.ui.theme.BrandRed
 import com.aipod.util.CrashLogger
@@ -124,6 +123,8 @@ fun WheelSettingsScreen(navController: NavController) {
     val debugMode by app.debugMode.collectAsState()
     val showDescriptions by app.showDescriptions.collectAsState()
     val hapticStrength by app.hapticStrength.collectAsState()
+    val glassBlur by app.glassBlur.collectAsState()
+    val glassBlurLevel by app.glassBlurLevel.collectAsState()
     val webDav by app.webDavConn.collectAsState()
     val fnos by app.fnosConn.collectAsState()
     val savedWebDav by app.savedWebDav.collectAsState()
@@ -235,7 +236,7 @@ fun WheelSettingsScreen(navController: NavController) {
     // 构建当前页条目
     val items: List<SettingItem> = when (node) {
         SettingsNode.Root ->         buildRootSettings(
-            sourceMode, audioQuality, usbExclusive, usbHighGain, scanPace, hapticStrength, debugMode, showDescriptions,
+            sourceMode, audioQuality, usbExclusive, usbHighGain, scanPace, hapticStrength, glassBlur, glassBlurLevel, debugMode, showDescriptions,
             webDav, fnos, webDavScanning, coverCacheSize, transcodeSize, localCount, localScanning, localScanProgress,
             !localFolderUri.isNullOrBlank()
         )
@@ -280,8 +281,26 @@ fun WheelSettingsScreen(navController: NavController) {
                     val next = ScanPace.options[(idx + 1).let { if (it < 0) 0 else it % ScanPace.options.size }]
                     app.setScanPace(next.intervalMs, next.concurrency)
                 }
+                "backdropblur" -> scope.launch {
+                    val next = (glassBlurLevel + 1) % 4
+                    app.setGlassBlurLevel(next)
+                    statusLine = when (next) {
+                        0 -> "背景模糊：清晰封面（不模糊）"
+                        1 -> "背景模糊：轻 6dp"
+                        2 -> "背景模糊：中 16dp（默认）"
+                        3 -> "背景模糊：重 32dp"
+                        else -> ""
+                    }
+                }
             }
             is SettingItem.Toggle -> when (item.key) {
+                "glassblur" -> scope.launch {
+                    val next = !glassBlur
+                    app.setGlassBlur(next)
+                    statusLine = if (next)
+                        "液态玻璃已开：折射高光 + 菲涅尔亮边 + 色散，滚轮/列表选中均生效"
+                    else "液态玻璃已关：仅保留半透明底"
+                }
                 "usbexclusive" -> scope.launch {
                     val next = !usbExclusive
                     app.setUsbExclusive(next)
@@ -445,6 +464,11 @@ fun WheelSettingsScreen(navController: NavController) {
     // 当前曲目封面（设置页背景也跟随正在播放，观感与主页一致）
     val currentTrack = queue.getOrNull(currentIndex)
 
+    // 液态玻璃采样源：背景层录制进该 backdrop，滚轮玻璃从同一实例采样（兄弟配对）。
+    val glassBackdrop = rememberGlassBackdrop()
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalGlassBackdrop provides glassBackdrop
+    ) {
     Box(Modifier.fillMaxSize().background(Color(0xFF1A1A1D))) {
         // 背景：有播放用封面模糊，无播放用中性磨砂玻璃
         SettingsBackdrop(currentTrack, BrandRed)
@@ -526,6 +550,7 @@ fun WheelSettingsScreen(navController: NavController) {
             }
         }
     }
+    } // CompositionLocalProvider(LocalGlassBackdrop)
 }
 
 // ==================== 节点与条目 ====================
@@ -564,7 +589,7 @@ private fun SettingItem.subtitle(): String = when (this) {
 
 private fun buildRootSettings(
     source: SourceMode, quality: AudioQuality, usbExclusive: Boolean, usbHighGain: Boolean,
-    scanPace: Long, haptic: Int, debug: Boolean, showDescriptions: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
+    scanPace: Long, haptic: Int, glassOn: Boolean, backdropLevel: Int, debug: Boolean, showDescriptions: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
     coverSize: Long, transcodeSize: Long, localCount: Int, localScanning: Boolean, localScanProgress: String,
     hasLocalFolder: Boolean
 ): List<SettingItem> {
@@ -594,6 +619,22 @@ private fun buildRootSettings(
     )
     out += SettingItem.Choice("scanpace", "扫描节奏", paceName, Icons.Default.Speed)
     out += SettingItem.Choice("haptic", "震动强度", hapticName, Icons.Default.Vibration)
+    // 液态玻璃开关（backdrop 折射）+ 背景模糊度（封面 .blur，独立于开关）两个设置项。
+    out += SettingItem.Toggle(
+        "glassblur", "液态玻璃",
+        if (!glassOn) "关 · 仅半透明底" else "开 · 折射高光 + 菲涅尔亮边 + 色散",
+        Icons.Default.BlurOn
+    )
+    val backdropName = when (backdropLevel) {
+        0 -> "清晰 · 封面不模糊"
+        1 -> "轻 · 6dp"
+        2 -> "中 · 16dp"
+        3 -> "重 · 32dp"
+        else -> "中"
+    }
+    out += SettingItem.Choice(
+        "backdropblur", "背景模糊度", backdropName, Icons.Default.BlurOn
+    )
     out += SettingItem.Nav("webdav", "WebDAV 连接", if (webDav != null) "已配置" else "未配置", Icons.Default.Link)
     out += SettingItem.Nav("fnos", "飞牛音乐登录", if (fnos != null) "已登录" else "未登录", Icons.Default.Storage)
     out += SettingItem.Action(
@@ -746,18 +787,20 @@ private fun LogsScreenBody(showDetails: Boolean) {
 @Composable
 private fun SettingsBackdrop(current: com.aipod.data.Track?, red: Color) {
     val bmp: ImageBitmap? = rememberCoverBitmap(current?.coverUrl, current?.embeddedAudioUrl)
-    Box(Modifier.fillMaxSize()) {
+    val backdropBlur = com.aipod.ui.components.LocalGlassBlurConfig.current.backdropBlur
+    // 封面层 + 暗蒙层；整块录制进 backdrop，供兄弟节点的滚轮玻璃从同一实例采样。
+    Box(Modifier.fillMaxSize().glassBackdropSource(LocalGlassBackdrop.current)) {
+      Box(Modifier.fillMaxSize()) {
         if (bmp != null) {
             Image(bmp, null, contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = 1.15f; scaleY = 1.15f }.blur(32.dp))
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.48f)))
+                modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = 1.15f; scaleY = 1.15f }.blur(backdropBlur))
         } else {
-            // 无播放：中性磨砂玻璃（深灰雾面 + 柔光斑 + 高斯模糊），不掺任何彩色
+            // 无播放：中性磨砂玻璃（深灰雾面 + 柔光斑 + 轻度模糊），不掺任何彩色
             Canvas(
                 Modifier
                     .fillMaxSize()
                     .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
-                    .blur(40.dp)
+                    .blur(14.dp)
             ) {
                 val w = size.width; val h = size.height
                 drawRect(Brush.verticalGradient(
@@ -775,5 +818,8 @@ private fun SettingsBackdrop(current: com.aipod.data.Track?, red: Color) {
                 )
             }
         }
+      }
+      // 暗蒙层：保证白字可读
+      Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.44f)))
     }
 }

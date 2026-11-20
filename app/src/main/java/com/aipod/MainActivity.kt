@@ -29,27 +29,22 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -69,7 +64,6 @@ import com.aipod.player.PlayerController
 import com.aipod.ui.components.DockItem
 import com.aipod.ui.components.GlassMiniPlayer
 import com.aipod.ui.components.LiquidGlassDock
-import com.aipod.ui.components.MiniPlayer
 import com.aipod.ui.screens.LibraryScreen
 import com.aipod.ui.screens.PlayerScreen
 import com.aipod.ui.screens.WheelSettingsScreen
@@ -364,30 +358,25 @@ private fun AppRoot() {
     //    透明化后，即便导航栏未移除，播放页的黑色背景也会直接透出，不再有可见黑边；
     // 3) 同时用 androidx 控制器 + 传统标志双管齐下尝试真正隐藏系统栏。
     val fullScreen by MusicBoxApp.instance.fullScreenMode.collectAsState()
-    // 把「屏幕方向」也纳入触发键：旋转设备时强制重新评估沉浸状态，
-    // 避免横屏 Cover Flow 全屏「有时触发不了」（方向变化但 fullScreen/onPlayer 未变时也能重跑）。
-    val orientation = LocalConfiguration.current.orientation
     // 冷启动直接进入「正在播放」页：保留 library 作为栈底，启动时一次性压入 player，
     // 使返回栈为 [library, player]，与「从曲库点进播放页」完全一致——MENU 长按 / 返回
-    // 仍能正常退回曲库。守卫只在首次竖屏时消耗，横屏启动不打断全屏 CoverFlow。
+    // 仍能正常退回曲库。App 已锁死竖屏，无方向分支。
     var bootToPlayerDone by remember { mutableStateOf(false) }
-    LaunchedEffect(orientation) {
-        if (!bootToPlayerDone && orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+    LaunchedEffect(Unit) {
+        if (!bootToPlayerDone) {
             bootToPlayerDone = true
             runCatching { navController.navigate("player") { launchSingleTop = true } }
         }
     }
-    LaunchedEffect(fullScreen, onPlayer, orientation) {
+    LaunchedEffect(fullScreen, onPlayer) {
         val activity = context.findActivity() as? MainActivity ?: return@LaunchedEffect
         val window = activity.window
         val decor = window.decorView
         val immersive = fullScreen || onPlayer
-        // 竖屏所有页面（曲库 / 设置 / 播放）统一走「透明栏 + 白色图标 + 系统栏常驻」：
+        // App 已锁死竖屏：所有页面（曲库 / 设置 / 播放）统一走「透明栏 + 白色图标 + 系统栏常驻」，
         // 内容 full-bleed 铺到栏下，状态栏 / 导航栏区域透出各页的红色光晕或模糊封面背景，
         // 与内容完全同色——彻底消除浅色主题的白条、深色主题的黑色条（图二的割裂根因）。
-        // 横屏只用于 CoverFlow：整屏沉浸，隐藏所有系统栏。
-        val portrait = orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
-        activity.setImmersiveWanted(true, keepStatusBar = portrait)
+        activity.setImmersiveWanted(true, keepStatusBar = true)
         // 诊断：同时记录状态栏 inset 与内容视图的实际高度，便于定位「顶部黑带」。
         val insets = androidx.core.view.ViewCompat.getRootWindowInsets(decor)
         val navRight =
@@ -397,7 +386,7 @@ private fun AppRoot() {
         CrashLogger.info(
             "Immersive",
             "immersive=$immersive fullScreen=$fullScreen onPlayer=$onPlayer " +
-                "keepStatus=${activity.keepStatusBarVisible} v=${BuildConfig.VERSION_NAME} orientation=$orientation " +
+                "keepStatus=${activity.keepStatusBarVisible} v=${BuildConfig.VERSION_NAME} " +
                 "navRightInset=$navRight statusTopInset=$statusTop " +
                 "decorH=${decor.height} contentH=${decor.findViewById<android.view.View>(android.R.id.content)?.height} " +
                 "flags=${decor.systemUiVisibility} " +
@@ -453,6 +442,11 @@ private fun AppRoot() {
     }
 
     val accentArgb by MusicBoxApp.instance.accentColor.collectAsState()
+    // 液态玻璃：开关控制 backdrop 折射层是否绘制；背景模糊度是封面图自身的 blur，两者独立。
+    // 折射效果在低版本 Android 上由库自动降级，不会崩。
+    val glassBlur by MusicBoxApp.instance.glassBlur.collectAsState()
+    val glassBlurLevel by MusicBoxApp.instance.glassBlurLevel.collectAsState()
+    val blurCfg = com.aipod.ui.components.GlassBlurConfig.of(glassBlur, glassBlurLevel)
     MusicBoxTheme(darkTheme = dark, accent = androidx.compose.ui.graphics.Color(0xFF000000.toInt() or accentArgb)) {
         // 系统栏现在由 Activity 统一接管：竖屏全部「透明栏 + 白图标 + 常驻」，横屏整屏隐藏。
         // 这里绝不能再调用 SystemBarColors——它会把栏刷成不透明主题背景色（浅色=白），
@@ -469,33 +463,31 @@ private fun AppRoot() {
         var shellHeight by remember { mutableStateOf(0.dp) }
         val density = LocalDensity.current
 
-        Box(Modifier.fillMaxSize().background(rootBg)) {
+        val rootModifier = Modifier.fillMaxSize().background(rootBg)
+        // 液态玻璃总开关下发；每页自行创建 backdrop 采样源（见各页面 rememberGlassBackdrop）。
+        androidx.compose.runtime.CompositionLocalProvider(
+            com.aipod.ui.components.LocalGlassBlurConfig provides blurCfg
+        ) {
+        Box(rootModifier) {
             Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxWidth().background(rootBg)) {
-                // 横屏：只保留 CoverFlow 一种模式，设置页 / 播放页一律不显示。
-                // LibraryScreen 的横屏分支本身就是全屏 CoverFlow，因此横屏直接渲染它，
-                // 完全绕过 NavHost —— 从设置页或播放页转到横屏时也会立刻切到封面流；
-                // 转回竖屏后 NavHost 仍在原路由，回到原来的页面。
-                if (orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
-                    LibraryScreen(navController)
-                } else {
-                    NavHost(
-                        navController,
-                        startDestination = "library",
-                        // 页面切换动画：所有页面统一纯淡入淡出，不带任何位移/滑动转场。
-                        // 需求：从首页进任何页面（含正在播放），下半屏滚轮视觉上不动，只切换上半屏内容；
-                        // 播放页此前用 slideInVertically 从底部升起，会带动整个页面（含滚轮）跳动一下，
-                        // 与设置/歌曲/歌单页观感不一致，故移除，统一走这里的全局淡入淡出。
-                        enterTransition = { fadeIn(tween(180)) },
-                        exitTransition = { fadeOut(tween(140)) },
-                        popEnterTransition = { fadeIn(tween(180)) },
-                        popExitTransition = { fadeOut(tween(140)) }
-                    ) {
-                        composable("library") { LibraryScreen(navController) }
-                        composable("settings") { WheelSettingsScreen(navController) }
-                        composable("player") { PlayerScreen(navController) }
-                        composable("songdetail") { com.aipod.ui.screens.SongDetailScreen(navController) }
-                    }
+                // App 锁死竖屏，横屏分支已移除，统一走 NavHost。
+                NavHost(
+                    navController,
+                    startDestination = "library",
+                    // 页面切换动画：所有页面统一纯淡入淡出，不带任何位移/滑动转场。
+                    // 需求：从首页进任何页面（含正在播放），下半屏滚轮视觉上不动，只切换上半屏内容；
+                    // 播放页此前用 slideInVertically 从底部升起，会带动整个页面（含滚轮）跳动一下，
+                    // 与设置/歌曲/歌单页观感不一致，故移除，统一走这里的全局淡入淡出。
+                    enterTransition = { fadeIn(tween(180)) },
+                    exitTransition = { fadeOut(tween(140)) },
+                    popEnterTransition = { fadeIn(tween(180)) },
+                    popExitTransition = { fadeOut(tween(140)) }
+                ) {
+                    composable("library") { LibraryScreen(navController) }
+                    composable("settings") { WheelSettingsScreen(navController) }
+                    composable("player") { PlayerScreen(navController) }
+                    composable("songdetail") { com.aipod.ui.screens.SongDetailScreen(navController) }
                 }
             }
 
@@ -519,6 +511,7 @@ private fun AppRoot() {
             }
         }
         }
+        } // CompositionLocalProvider(LocalGlassBlurConfig)
     }
 }
 

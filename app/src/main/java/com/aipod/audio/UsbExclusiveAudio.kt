@@ -1,12 +1,9 @@
 package com.aipod.audio
 
 import android.content.Context
-import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import com.aipod.util.CrashLogger
 import com.decent.usbaudio.UsbAudioDevice
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 /**
  * USB 独占输出（实验性）的门禁与状态报告。

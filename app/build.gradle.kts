@@ -4,6 +4,8 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
+    // Kotlin 2.x 起 Compose Compiler 独立成插件，版本与 Kotlin 对齐，旧的 composeOptions 代码块已废弃。
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 // 签名配置：仓库内不携带任何密钥。
@@ -27,11 +29,12 @@ android {
 
     defaultConfig {
         applicationId = "com.aipod"
-        // Media3 1.9.3 (media3-session) 要求 minSdk >= 23
+        // Media3 1.9.3 要求 minSdk >= 23；backdrop 液态玻璃在 API 31+ 走 RenderEffect，
+        // 低版本由库自动降级（不崩），无硬性 minSdk 抬升要求。
         minSdk = 23
         targetSdk = 34
-        versionCode = 115
-        versionName = "4.4.0"
+        versionCode = 142
+        versionName = "5.0.5"
     }
 
     signingConfigs {
@@ -78,10 +81,6 @@ android {
         abortOnError = false
     }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.14"
-    }
-
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -90,7 +89,8 @@ android {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
+    // Compose BOM 2025.12.00 → Compose 1.10.0，与 backdrop 1.0.2 + Kotlin 2.2.21 对齐。
+    val composeBom = platform("androidx.compose:compose-bom:2025.12.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
@@ -101,6 +101,11 @@ dependencies {
     implementation("androidx.compose.animation:animation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    // 液态玻璃：Kyant0/AndroidLiquidGlass（backdrop）——纯 Jetpack Compose 实现，
+    // 用 RenderEffect/RuntimeShader 做背景采样 + vibrancy/blur/lens 折射 + 高光。
+    // 无需 AndroidView 桥接，从根上避免 View 库与 Compose RenderNode 的重入崩溃。
+    // 版本对齐：backdrop 1.0.2 依赖 Kotlin 2.2.21 + Compose 1.10.0（BOM 2025.12.00）。
+    implementation("io.github.kyant0:backdrop:1.0.2")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
@@ -111,7 +116,6 @@ dependencies {
     // Media3 1.9.3 (ExoPlayer + MediaSession + OkHttp datasource)
     // 升级到 1.9.3 以便与 USB bit-perfect 库（decent-player，基于 1.9.3 的 AudioSink）对齐。
     implementation("androidx.media3:media3-exoplayer:1.9.3")
-    implementation("androidx.media3:media3-exoplayer-dash:1.9.3")
     implementation("androidx.media3:media3-session:1.9.3")
     implementation("androidx.media3:media3-datasource-okhttp:1.9.3")
     implementation("androidx.media3:media3-decoder:1.9.3")

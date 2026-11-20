@@ -50,6 +50,9 @@ import com.aipod.data.Track
 import com.aipod.player.PlayerController
 import com.aipod.ui.components.ClickWheel
 import com.aipod.ui.components.fadeEdges
+import com.aipod.ui.components.glassBackdropSource
+import com.aipod.ui.components.rememberGlassBackdrop
+import com.aipod.ui.components.LocalGlassBackdrop
 import com.aipod.ui.components.rememberCoverBitmap
 import com.aipod.ui.theme.BrandRed
 import kotlinx.coroutines.launch
@@ -87,6 +90,11 @@ fun SongDetailScreen(navController: NavController) {
         scope.launch { app.toggleFavorite(t) }
     }
 
+    // 液态玻璃采样源：背景层录制进该 backdrop，滚轮玻璃从同一实例采样（兄弟配对）。
+    val glassBackdrop = rememberGlassBackdrop()
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalGlassBackdrop provides glassBackdrop
+    ) {
     Box(Modifier.fillMaxSize()) {
         // 与首页 / 播放页一致的模糊封面背景
         SongDetailBackdrop(track)
@@ -201,6 +209,7 @@ fun SongDetailScreen(navController: NavController) {
             }
         }
     }
+    } // CompositionLocalProvider(LocalGlassBackdrop)
 }
 
 /**
@@ -209,19 +218,26 @@ fun SongDetailScreen(navController: NavController) {
  */
 @Composable
 private fun SongDetailBackdrop(track: Track?) {
-    Box(Modifier.fillMaxSize().background(Color(0xFF151517)))
-    val bmp = rememberCoverBitmap(track?.coverUrl, track?.embeddedAudioUrl)
-    if (bmp != null) {
-        Image(
-            bitmap = bmp,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer { scaleX = 1.15f; scaleY = 1.15f }
-                .blur(32.dp)
-        )
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.46f)))
+    // 封面层 + 暗蒙层；整块录制进 backdrop，供兄弟节点的滚轮玻璃从同一实例采样。
+    Box(Modifier.fillMaxSize().glassBackdropSource(LocalGlassBackdrop.current)) {
+      Box(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxSize().background(Color(0xFF151517)))
+        val bmp = rememberCoverBitmap(track?.coverUrl, track?.embeddedAudioUrl)
+        val backdropBlur = com.aipod.ui.components.LocalGlassBlurConfig.current.backdropBlur
+        if (bmp != null) {
+            Image(
+                bitmap = bmp,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { scaleX = 1.15f; scaleY = 1.15f }
+                    .blur(backdropBlur)
+            )
+        }
+      }
+      // 暗蒙层：保证白字可读
+      Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.42f)))
     }
 }
 

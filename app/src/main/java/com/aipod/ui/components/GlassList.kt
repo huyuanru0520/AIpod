@@ -3,7 +3,6 @@ package com.aipod.ui.components
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -16,17 +15,23 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.lens
 
 /**
- * 列表「玻璃选中」高亮：选中项罩一层半透明玻璃 + 上亮下暗的描边，
- * 透明度用动画淡入淡出；未选中时完全透明，不占视觉重量。
+ * 列表「液态玻璃选中」高亮（Apple Liquid Glass 观感）。
  *
- * 玻璃感来自三件事：
- * 1. 一层很淡的半透明白底（磨砂玻璃的「雾面」）；
- * 2. 顶部亮、底部暗的竖向渐变描边（玻璃厚度折射的亮线）；
+ * 与滚轮 [com.aipod.ui.components.GlassSurface] 用**同一套 backdrop 真折射方案**：
+ * 选中项是一小片玻璃，中心清晰透出背景、只在边缘做 lens 折射 + 色散，观感与滚轮一致。
  *
- * @param selected 是否选中，透明度随它动画过渡
- * @param shape 圆角形状，需与列表项裁切一致
+ * ★ 离散控制（v5.0.3）：选中是离散状态，**不能用淡入淡出动画**——backdrop 是坐标依赖的，
+ * 滑动时多个 item 的渐变中间态（a∈(0,1)）会各自采到边缘背景，叠加成一串残留框。
+ * 现在 selected=true 才挂 drawBackdrop、false 立即卸载，任何时刻恰好只有 1 项在采样，
+ * 从根上消除滑动残留。
+ *
+ * @param selected 是否选中（离散，无渐变）
+ * @param shape 圆角形状，需与列表项裁切一致（CornerBasedShape，lens 才能生效）
  */
 @Composable
 fun Modifier.glassHighlight(
@@ -34,23 +39,30 @@ fun Modifier.glassHighlight(
     shape: Shape,
     tint: Color = Color.White
 ): Modifier {
-    val a by animateFloatAsState(
-        targetValue = if (selected) 1f else 0f,
-        animationSpec = tween(180),
-        label = "glassHighlight"
-    )
-    return this
-        .background(tint.copy(alpha = 0.12f * a), shape)
-        .border(
-            width = 1.dp,
-            brush = Brush.verticalGradient(
-                listOf(
-                    tint.copy(alpha = 0.42f * a),
-                    tint.copy(alpha = 0.08f * a)
-                )
-            ),
-            shape = shape
+    val cfg = LocalGlassBlurConfig.current
+    val intensity = if (cfg.enabled) cfg.intensity else 0f
+    val backdrop = LocalGlassBackdrop.current
+
+    // 未选中 / 开关关闭：直接返回原 modifier，不挂任何绘制节点，零残留。
+    if (!selected || intensity <= 0f) return this
+
+    // 有 backdrop：和滚轮同款真折射。lens 高度受限于最小圆角半径（列表项 12~14dp，取 6dp）。
+    if (backdrop != null) {
+        return this.drawBackdrop(
+            backdrop = backdrop,
+            shape = { shape },
+            effects = {
+                // 清透优先：极小 blur + 边缘 lens，不用 vibrancy（避免发白油腻）。
+                blur(1f.dp.toPx())
+                lens(5f.dp.toPx(), 10f.dp.toPx(), chromaticAberration = true)
+            },
+            // 极淡提亮底提升可读性。不画任何黑描边，杜绝黑框。
+            onDrawSurface = { drawRect(tint.copy(alpha = 0.10f)) }
         )
+    }
+
+    // 无 backdrop 页面兜底：淡色底，不复用会留黑边的 Canvas 光学描边。
+    return this.background(tint.copy(alpha = 0.12f), shape)
 }
 
 /**

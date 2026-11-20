@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import com.aipod.util.CrashLogger
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -33,10 +32,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
@@ -45,9 +42,6 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.Subject
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -75,8 +69,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
@@ -85,11 +79,9 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalConfiguration
@@ -101,7 +93,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import androidx.navigation.NavController
 import com.aipod.MusicBoxApp
@@ -116,12 +107,16 @@ import com.aipod.ui.components.CoverImage
 import com.aipod.ui.components.HiResBadge
 import com.aipod.ui.components.fadeInList
 import com.aipod.ui.components.glassHighlight
+import com.aipod.ui.components.glassBackdropSource
+import com.aipod.ui.components.rememberGlassBackdrop
+import com.aipod.ui.components.LocalGlassBackdrop
 import com.aipod.ui.components.rememberCoverBitmap
 import com.aipod.ui.theme.BrandRed
 import com.aipod.util.Haptics
 import com.aipod.util.ShakeDetector
 import com.aipod.util.formatDuration
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlin.math.abs
@@ -130,19 +125,15 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * CoverFlow 切歌翻页动画时长；同时作为滚轮切歌节流间隔，保证一次动画完整播完。
- * 240ms 是权衡值：转一圈约切 8 首（不至于像没有节流时一转几十首、动画全被打断，
- * 也不像 480ms 时一圈才 4 首太少）。改大 = 切歌更慢动画更从容，改小 = 更快更多。
- */
-private const val COVER_FLOW_DURATION_MS = 240L
-
-/**
  * 播放页：专辑封面与歌词整合在同一屏 —— 顶部是当前歌曲的小封面与信息，
  * 中间是随播放进度滚动的歌词，底部是进度条与「上一首 / 播放 / 下一首」三个按钮。
  * 随机、循环等模式开关统一收进「播放队列」列表页（见 [QueueSheet]）。
  *
  * 页面滚动 / 歌词滚动 / 弹出队列都不会触碰播放器状态，
  * 只有显式点击播放控制、歌词行或队列中的歌曲才会改变播放进度 / 歌曲。
+ *
+ * 封面切歌动画采用 spring（与专辑列表同一手感），滚轮切歌不节流——
+ * 与专辑一致：每格 18° 即切一首，快速连转时 spring 平滑追逐目标，动画连续不被打断。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -226,6 +217,11 @@ fun PlayerScreen(navController: NavController) {
         return
     }
 
+    // 液态玻璃采样源：背景层录制进该 backdrop，滚轮玻璃从同一实例采样（兄弟配对）。
+    val glassBackdrop = rememberGlassBackdrop()
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalGlassBackdrop provides glassBackdrop
+    ) {
     Box(Modifier.fillMaxSize()) {
         // 竖屏背景与横屏一致：模糊当前封面 + 主色调 + 暗化渐变
         CoverBackdrop(current)
@@ -286,8 +282,8 @@ fun PlayerScreen(navController: NavController) {
             }
 
             // 封面页默认滚轮行为：切歌。上一格 = 上一首，下一格 = 下一首。
-            // 节流已下沉到 ClickWheel 的 rotateIntervalMs（与音效震动同点控制、节奏严格对齐），
-            // 这里只管切歌本身，不再单独计时。
+            // 不节流（与专辑列表一致）：每格立即切一首，动画由 spring 连续追逐目标，
+            // 快速连转也不会被反复打断；音效震动按 ClickWheel 默认的 60ms 触发。
             fun rotateSwitchSong(steps: Int) {
                 if (steps > 0) PlayerController.next() else PlayerController.previous()
             }
@@ -463,10 +459,6 @@ fun PlayerScreen(navController: NavController) {
                         diameter = wheel,
                         isPlaying = isPlaying,
                         centerActive = wheelMode != 0,
-                        // 只在「封面 + 默认模式 + 非队列」的切歌场景启用上报节流，让切歌节奏与
-                        // 音效震动严格对齐（切一首=响一声），且一次 CoverFlow 动画完整播完。
-                        // 音量 / 进度 / 歌词 / 队列逐格场景传 0，保持每格即时响应。
-                        rotateIntervalMs = if (wheelMode == 0 && !showLyrics && !menuOpen) COVER_FLOW_DURATION_MS else 0L,
                         onRotate = { steps ->
                             when {
                                 menuOpen -> moveQueueSelection(steps)
@@ -533,6 +525,7 @@ fun PlayerScreen(navController: NavController) {
         showQueue = showQueue, queue = queue, currentIndex = idx,
         shuffle = shuffle, repeatMode = repeatMode
     ) { showQueue = false }
+    } // CompositionLocalProvider(LocalGlassBackdrop)
 }
 
 /**
@@ -690,9 +683,8 @@ private fun NowPlayingArt(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // 上一首/下一首切歌时，封面以 CoverFlow 式 3D 翻转滑入滑出，取代原来的硬切。
-            // 方向由曲目在队列中的索引变化自动推断，覆盖点击 / 自动播完 / 队列选歌所有来源。
-            CoverFlowSwitcher(track = track, art = art)
+            // 切歌封面采用与专辑列表同一套连续 3D 动画，但只显示当前一张、不漏出邻封。
+            CoverFlowSwitcher(art = art)
             Spacer(Modifier.height(18.dp))
             if (track.isHiRes || track.qualityLabel.isNotBlank()) {
                 HiResBadge(track, onDark = true)
@@ -723,84 +715,63 @@ private fun NowPlayingArt(
 }
 
 /**
- * 切歌封面动画（CoverFlow 风格）：曲目切换时，旧封面朝一侧做 3D 翻转 + 缩小 + 淡出，
- * 新封面从另一侧翻转进入，形成唱片架「翻页」感，取代原来生硬的瞬时换图。
- *
- * 方向自动推断：记录上一首曲目在队列中的索引，与当前索引比较——
- * 索引增大视为「下一首」（新封面自右侧进入），减小视为「上一首」（自左侧进入）。
- * 这样点击上一首/下一首、自动播完、队列选歌、锁屏/蓝牙控制等所有切歌来源都能覆盖。
- *
- * 只在 track.id 真正变化时启动动画；首次组合、同一首歌的进度/暂停刷新都不会触发。
+ * CoverFlow 切歌动画（与专辑列表同一手感，但不露出邻封）：
+ * 维护一个连续的「虚拟唱片架位置」[position]（浮点队列索引），切歌只是改变它的目标值，
+ * 用 spring 平滑追逐。这样快速连转滚轮时目标连续更新、动画连续跟随，不会像旧的一次性
+ * tween 那样每次从 0 重新翻、被反复打断。3D 参数（42° / 0.28 缩放 / 14f 景深）与专辑
+ * ClickCoverFlow 完全一致；唯一区别是相邻封面在 norm=±1 时 alpha 归零——静止时屏幕上
+ * 只有当前一张，不漏出别的封面。
  */
 @Composable
-private fun CoverFlowSwitcher(track: Track, art: Dp) {
-    // 订阅当前索引，仅用于推断切歌方向（新曲目在队列中相对上一首靠前还是靠后）
+private fun CoverFlowSwitcher(art: Dp) {
     val idx by PlayerController.currentIndex.collectAsState()
+    val queue by PlayerController.queue.collectAsState()
     val density = LocalDensity.current
     val artPx = with(density) { art.toPx() }
 
-    // 当前稳定展示的曲目 + 正在退出的旧封面（null = 无动画）
-    var shown by remember { mutableStateOf(track) }
-    var outgoing by remember { mutableStateOf<Track?>(null) }
-    // 新增封面进入方向：+1 自右，-1 自左
-    var direction by remember { mutableIntStateOf(1) }
-    val progress = remember { Animatable(0f) }
-
-    // 记住上一次的索引，用于推断方向；首帧不产生动画
-    var lastIdx by remember { mutableIntStateOf(idx) }
-
-    LaunchedEffect(track.id) {
-        if (track.id == shown.id) return@LaunchedEffect
-        // 方向：目标索引 >= 上次索引视为前进。队列选歌可能跨多首，只取方向符号。
-        direction = if (idx >= lastIdx) 1 else -1
-        lastIdx = idx
-        outgoing = shown
-        shown = track
-        progress.snapTo(0f)
-        progress.animateTo(
-            targetValue = 1f,
-            animationSpec = tween(durationMillis = COVER_FLOW_DURATION_MS.toInt(), easing = FastOutSlowInEasing)
+    // 连续虚拟位置：spring 追逐目标索引；仅当队列整体替换造成超大跳变（>10 首）时才直接
+    // 定位，避免跨越整段动画。正常滚轮连转时即便一帧跨几首也照常动画——spring 会平滑
+    // 追逐、逐首划过，与专辑 LazyRow 的连续滚动手感一致。
+    val position = remember { Animatable(idx.coerceAtLeast(0).toFloat()) }
+    LaunchedEffect(idx) {
+        if (idx < 0) return@LaunchedEffect
+        if (abs(idx - position.value) > 10f) position.snapTo(idx.toFloat())
+        else position.animateTo(
+            targetValue = idx.toFloat(),
+            animationSpec = spring(stiffness = 300f, dampingRatio = 0.78f)
         )
-        outgoing = null
     }
 
-    val p = progress.value
+    // 渲染窗口跟随虚拟位置逐首推进：只在跨越整数首时重组一次，3D 变换仍由 graphicsLayer
+    // 每帧快照读取 position.value 更新——与专辑同样的「只动图层、不重组整页」做法。
+    var centerIndex by remember { mutableIntStateOf(idx.coerceAtLeast(0)) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { position.value.roundToInt() }
+            .distinctUntilChanged()
+            .collect { centerIndex = it }
+    }
+
     Box(Modifier.size(art), contentAlignment = Alignment.Center) {
-        // 旧封面：朝反方向退出（翻转 + 缩小 + 淡出）
-        val old = outgoing
-        if (old != null) {
+        // 仅渲染当前索引 ±1；norm=±1 时 alpha=0，静止时只有当前封面可见。
+        for (i in (centerIndex - 1)..(centerIndex + 1)) {
+            val t = queue.getOrNull(i) ?: continue
             CoverFlowCard(
-                track = old,
+                track = t,
                 art = art,
                 modifier = Modifier.graphicsLayer {
-                    translationX = -direction * artPx * 0.85f * p
-                    rotationY = direction * 55f * p
-                    val s = 1f - 0.28f * p
+                    // 与专辑 ClickCoverFlow 同一套 3D 参数；i 在位置右侧 norm>0（下一首从右进入）。
+                    val norm = (i - position.value).coerceIn(-1f, 1f)
+                    rotationY = -norm * 42f
+                    val s = 1f - abs(norm) * 0.28f
                     scaleX = s
                     scaleY = s
-                    alpha = (1f - p).coerceIn(0f, 1f)
+                    // 不漏出别的封面：相邻封面 norm=±1 时归零，翻转途中两张平滑交叉淡化。
+                    alpha = (1f - norm * norm).coerceIn(0f, 1f)
+                    translationX = norm * artPx * 0.4f
                     cameraDistance = 14f * density.density
                 }
             )
         }
-        // 新封面：从进入方向翻转归位（有动画时 0→1，无动画时固定 1 即静止居中）
-        CoverFlowCard(
-            track = shown,
-            art = art,
-            modifier = Modifier.graphicsLayer {
-                if (old == null) {
-                    alpha = 1f
-                } else {
-                    translationX = direction * artPx * 0.85f * (1f - p)
-                    rotationY = -direction * 55f * (1f - p)
-                    val s = 0.72f + 0.28f * p
-                    scaleX = s
-                    scaleY = s
-                    alpha = p.coerceIn(0f, 1f)
-                    cameraDistance = 14f * density.density
-                }
-            }
-        )
     }
 }
 
@@ -1028,54 +999,47 @@ private fun LandscapeControls(
  */
 @Composable
 private fun CoverBackdrop(track: Track?) {
-    Box(Modifier.fillMaxSize().background(Color(0xFF131316)))
-    Crossfade(
-        targetState = track,
-        animationSpec = tween(durationMillis = 260),
-        label = "coverBackdrop"
-    ) { t -> BackdropLayer(t) }
-}
-
-@Composable
-private fun BackdropLayer(track: Track?) {
+    // 播放页背景：清晰封面（模糊度由设置控制）+ 主色调 + 上下暗化保证白字可读。
+    // 这一层同时作为滚轮的 backdrop 采样源（见文件底部 .glassBackdropSource）。
     val bitmap = rememberCoverBitmap(track?.coverUrl, track?.embeddedAudioUrl)
-    val dominant = remember(bitmap) {
-        val bmp = bitmap?.asAndroidBitmap()
-        // dominantColorOf 需要普通 Bitmap：先用小尺寸采样，避免在全尺寸大图上遍历像素
-        val small = bmp?.let {
-            runCatching { Bitmap.createScaledBitmap(it, 32, 32, true) }.getOrNull()
-        }
-        small?.let { dominantColorOf(it) } ?: Color(0xFF2B2B31)
-    }
-
-    // 封面就绪 / 切歌时让背景图淡入，避免从纯色底"啪"地跳到图片
+    val backdropBlur = com.aipod.ui.components.LocalGlassBlurConfig.current.backdropBlur
     val bgAlpha by animateFloatAsState(
         targetValue = if (bitmap != null) 0.9f else 0f,
         animationSpec = tween(durationMillis = 420),
         label = "backdropAlpha"
     )
-    if (bitmap != null) {
-        Image(
-            bitmap = bitmap,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer { scaleX = 1.16f; scaleY = 1.16f }
-                .blur(48.dp)
-                .alpha(bgAlpha)
-        )
+    val dominant = remember(bitmap) {
+        val bmp = bitmap?.asAndroidBitmap()
+        val small = bmp?.let { runCatching { Bitmap.createScaledBitmap(it, 32, 32, true) }.getOrNull() }
+        small?.let { dominantColorOf(it) } ?: Color(0xFF2B2B31)
     }
-    // 主色调统一整体色调
-    Box(Modifier.fillMaxSize().background(dominant.copy(alpha = 0.38f)))
-    // 上下暗化，保证白色文字可读
-    Box(
-        Modifier.fillMaxSize().background(
-            Brush.verticalGradient(
-                listOf(Color.Black.copy(alpha = 0.28f), Color.Black.copy(alpha = 0.72f))
+    Box(Modifier.fillMaxSize().glassBackdropSource(LocalGlassBackdrop.current)) {
+        // —— 封面层：模糊度由「背景模糊度」档位控制 ——
+        Box(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize().background(Color(0xFF131316)))
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { scaleX = 1.16f; scaleY = 1.16f }
+                        .blur(backdropBlur)
+                        .alpha(bgAlpha)
+                )
+            }
+        }
+        // —— 蒙层：主色调 + 上下暗化，保证白字可读 ——
+        Box(Modifier.fillMaxSize().background(dominant.copy(alpha = 0.34f)))
+        Box(
+            Modifier.fillMaxSize().background(
+                Brush.verticalGradient(
+                    listOf(Color.Black.copy(alpha = 0.24f), Color.Black.copy(alpha = 0.62f))
+                )
             )
         )
-    )
+    }
 }
 
 /** 取主色调：偏好「有饱和度且亮度适中」的像素，并与平均色混合避免过艳。 */
