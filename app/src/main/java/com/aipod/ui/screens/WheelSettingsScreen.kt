@@ -6,8 +6,6 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -63,14 +61,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -90,9 +83,9 @@ import com.aipod.ui.components.coverCacheSizeBytes
 import com.aipod.ui.components.fadeEdges
 import com.aipod.ui.components.fadeInList
 import com.aipod.ui.components.glassHighlight
-import com.aipod.ui.components.glassBackdropSource
 import com.aipod.ui.components.rememberGlassBackdrop
 import com.aipod.ui.components.LocalGlassBackdrop
+import com.aipod.ui.components.AmbientMeshBackground
 import com.aipod.ui.components.rememberCoverBitmap
 import com.aipod.ui.theme.BrandRed
 import com.aipod.util.CrashLogger
@@ -285,10 +278,10 @@ fun WheelSettingsScreen(navController: NavController) {
                     val next = (glassBlurLevel + 1) % 4
                     app.setGlassBlurLevel(next)
                     statusLine = when (next) {
-                        0 -> "背景模糊：清晰封面（不模糊）"
-                        1 -> "背景模糊：轻 6dp"
-                        2 -> "背景模糊：中 16dp（默认）"
-                        3 -> "背景模糊：重 32dp"
+                        0 -> "背景流光：清透"
+                        1 -> "背景流光：柔和"
+                        2 -> "背景流光：均衡（默认）"
+                        3 -> "背景流光：浓郁"
                         else -> ""
                     }
                 }
@@ -495,7 +488,7 @@ fun WheelSettingsScreen(navController: NavController) {
                 }
             }
 
-            // 屏幕区：不加底色 / 边框，列表直接浮在模糊封面 / 红色光晕上，玻璃质感
+            // 屏幕区：不加底色 / 边框，列表直接浮在封面取色的流光背景上
             Box(
                 Modifier
                     .weight(1f)
@@ -619,21 +612,22 @@ private fun buildRootSettings(
     )
     out += SettingItem.Choice("scanpace", "扫描节奏", paceName, Icons.Default.Speed)
     out += SettingItem.Choice("haptic", "震动强度", hapticName, Icons.Default.Vibration)
-    // 液态玻璃开关（backdrop 折射）+ 背景模糊度（封面 .blur，独立于开关）两个设置项。
+    // 液态玻璃开关（backdrop 折射）+ 背景流光浓度（环境光渐变，独立于开关）两个设置项。
     out += SettingItem.Toggle(
         "glassblur", "液态玻璃",
         if (!glassOn) "关 · 仅半透明底" else "开 · 折射高光 + 菲涅尔亮边 + 色散",
         Icons.Default.BlurOn
     )
+    // 背景已从「模糊封面」改为「封面取色 + 动态流光」，这一项现在控制流光的扩散与浓度。
     val backdropName = when (backdropLevel) {
-        0 -> "清晰 · 封面不模糊"
-        1 -> "轻 · 6dp"
-        2 -> "中 · 16dp"
-        3 -> "重 · 32dp"
-        else -> "中"
+        0 -> "清透 · 光斑收敛"
+        1 -> "柔和"
+        2 -> "均衡"
+        3 -> "浓郁 · 光斑扩散"
+        else -> "均衡"
     }
     out += SettingItem.Choice(
-        "backdropblur", "背景模糊度", backdropName, Icons.Default.BlurOn
+        "backdropblur", "背景流光", backdropName, Icons.Default.BlurOn
     )
     out += SettingItem.Nav("webdav", "WebDAV 连接", if (webDav != null) "已配置" else "未配置", Icons.Default.Link)
     out += SettingItem.Nav("fnos", "飞牛音乐登录", if (fnos != null) "已登录" else "未登录", Icons.Default.Storage)
@@ -717,18 +711,26 @@ private fun SettingsList(items: List<SettingItem>, selected: Int, showDescriptio
     }
     val fg = Color.White
     val rowShape = RoundedCornerShape(14.dp)
+    // 与主界面一致：不再套整列玻璃卡，列表直接浮在流光背景上，选中行只留一层白色柔光。
+    Box(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 4.dp, vertical = 4.dp)
+            .fadeInList()
+            .fadeEdges(0.08f)
+    ) {
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize().fadeInList().fadeEdges(),
+        modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
-        contentPadding = PaddingValues(vertical = 24.dp)
+        contentPadding = PaddingValues(vertical = 20.dp)
     ) {
         itemsIndexed(items) { i, item ->
             val sel = i == selected
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp)
+                    .padding(horizontal = 10.dp)
                     .glassHighlight(sel, rowShape)
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -760,6 +762,7 @@ private fun SettingsList(items: List<SettingItem>, selected: Int, showDescriptio
             }
         }
     }
+    }
 }
 
 @Composable
@@ -783,43 +786,13 @@ private fun LogsScreenBody(showDetails: Boolean) {
     }
 }
 
-/** 设置页背景：与主界面一致（有播放用封面模糊，无播放用中性磨砂玻璃）。 */
+/** 设置页背景：与主界面完全一致——封面取色 + 动态流光渐变（详见 AmbientMeshBackground）。 */
 @Composable
 private fun SettingsBackdrop(current: com.aipod.data.Track?, red: Color) {
     val bmp: ImageBitmap? = rememberCoverBitmap(current?.coverUrl, current?.embeddedAudioUrl)
-    val backdropBlur = com.aipod.ui.components.LocalGlassBlurConfig.current.backdropBlur
-    // 封面层 + 暗蒙层；整块录制进 backdrop，供兄弟节点的滚轮玻璃从同一实例采样。
-    Box(Modifier.fillMaxSize().glassBackdropSource(LocalGlassBackdrop.current)) {
-      Box(Modifier.fillMaxSize()) {
-        if (bmp != null) {
-            Image(bmp, null, contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = 1.15f; scaleY = 1.15f }.blur(backdropBlur))
-        } else {
-            // 无播放：中性磨砂玻璃（深灰雾面 + 柔光斑 + 轻度模糊），不掺任何彩色
-            Canvas(
-                Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
-                    .blur(14.dp)
-            ) {
-                val w = size.width; val h = size.height
-                drawRect(Brush.verticalGradient(
-                    listOf(Color(0xFF242428), Color(0xFF151517), Color(0xFF2A2A2F))
-                ))
-                drawCircle(
-                    brush = Brush.radialGradient(listOf(Color.White.copy(alpha = 0.10f), Color.Transparent)),
-                    radius = maxOf(w, h) * 0.75f,
-                    center = Offset(w * 0.28f, h * 0.18f)
-                )
-                drawCircle(
-                    brush = Brush.radialGradient(listOf(Color.White.copy(alpha = 0.05f), Color.Transparent)),
-                    radius = maxOf(w, h) * 0.6f,
-                    center = Offset(w * 0.85f, h * 0.88f)
-                )
-            }
-        }
-      }
-      // 暗蒙层：保证白字可读
-      Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.44f)))
-    }
+    AmbientMeshBackground(
+        bitmap = bmp,
+        modifier = Modifier.fillMaxSize(),
+        fallback = red
+    )
 }

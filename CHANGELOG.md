@@ -4,6 +4,113 @@
 
 <!-- 文末 compare 链接已指向实际 GitHub 仓库。 -->
 
+## [5.2.3] - 2026-11-20
+
+### 修复 · 背景始终不跟封面取色（真正的根因）
+- 日志给出了确定性证据：
+  `IllegalArgumentException: Cannot coerce value to an empty range: maximum -44.0 is less than minimum 44.0`。
+- 根因：`hueNear()` 内部写的是 `d.coerceIn(-maxDelta, maxDelta)`，而调用侧有一次传了 `-44f`
+  （想表达"往负方向偏"），于是变成 `coerceIn(44f, -44f)`——空区间，Kotlin 直接抛异常。
+  **每一次取色都崩在这里**，整条链路退回兜底色（苹果红），所以背景永远同一个颜色。
+- 修复：函数内先取 `abs(maxDelta)` 再夹逼，任何调用侧符号都安全；同时把第二团副色改成
+  「固定落在主色相反侧 40°」，避免 light 与 vibrant 同色相时两团光完全重合、画面退回单色。
+- 修复后每次换封面都会打出一条 `INFO/Mesh: 封面取色 base=#… primary=#…`，可作为自检依据。
+
+### 修复 · 列表选中项仍是磨砂块
+- 与玻璃参数无关，是这两行造成的：
+  1. `blur(1dp)` 把背景糊成了平均色，玻璃失去"透过它看到东西"的依据；
+  2. `drawRect(White, alpha 0.10)` 是 `srcOver` 覆盖——白 alpha 会把彩色背景冲淡成灰雾。
+- 现在：**完全去掉 blur**，只保留边缘 `lens` 折射与色散，中心 100% 透出背景原色；
+  提亮改用 `BlendMode.Screen`（只抬亮度、不改色相），再叠一层左上→右下的对角薄膜高光、
+  底部一道极淡反射线和 1px 轮廓，得到的是「一片透明玻璃」而不是「一层灰白膜」。
+
+## [5.2.2] - 2026-11-20
+
+### 修复 · 背景不跟封面取色（一直是同一个颜色）
+- **根因**：`produceState` 用 `ImageBitmap` 当 key，而 `CoverStore` 每次重组都会新建一个包装对象，
+  于是每次重组都重启取色协程。播放中每秒都有进度/状态刷新，协程被反复取消重启，永远停在上一次的
+  兜底色（苹果红）——所以背景看起来"一直一个颜色"。
+- **修复**：先转成底层 `android.graphics.Bitmap`（同一封面是同一实例）再作为 key，取色只在换封面时跑一次；
+  切歌时保留旧色直到新色算完，不再先闪回兜底红再过渡。
+- **兜底**：Palette 给不出 swatch（极端单色/纯黑边封面）或抛异常时，改用自写的「色相 12 桶加权聚类」
+  从像素里取三色，保证任何封面都有色可取，不会退回主题色。
+- 新增 `INFO/Mesh` 日志：记录每张封面的取色结果（base/primary/secondary/accent），便于确认是否真的取到色。
+
+### 修复 · 列表选中项又变成磨砂块
+- 上一版选中项用「半透明白直接覆盖」，白 alpha 会把彩色背景压成灰雾，看起来就是一块磨砂塑料板。
+- 改回**和滚轮同款的真玻璃高亮**（`glassHighlight`：离散挂载 + 轻 `lens` 折射 + 极淡白底），
+  并保留离散控制（只有选中项挂 backdrop，滚动不采样中间态），不会留折射残影；
+  现在不再套整列玻璃卡，也就不存在「玻璃叠玻璃」发灰的问题。
+
+## [5.2.1] - 2026-11-20
+
+### 背景：模糊封面 → 封面取色 + 动态流光（Mesh Gradient）
+- **不再用整张封面高斯模糊铺满**：模糊封面有涂抹感、颜色浑浊、亮度不可控三个死穴。改为用
+  `androidx.palette` 从封面提取「鲜艳 / 深艳 / 明亮」三档色，再统一收敛到主色相附近
+  （色相最多偏 ±34°、明度夹逼到暗部区间），生成四团缓慢游走 + 呼吸缩放的大半径径向渐变。
+  色相收敛是关键：直接用互补色会在交界处混成灰绿泥浆。
+- **动起来**：四团光沿各自的 Lissajous 轨道缓慢游走（周期 60~130 秒），中间自然交融出第三种颜色；
+  取色本身有 600ms 颜色过渡，切歌不会「啪」地跳色。
+- **稳定性与性能**：纯 Canvas 绘制，不做真实高斯模糊、不用 `BlendMode.Plus`；时钟降到 25fps
+  （柔光每秒只移动几个像素，肉眼无感），每帧整屏重绘量砍掉一半以上——这块同时还是滚轮玻璃的
+  backdrop 采样源，省的是双份。无封面时用苹果红作种子色，保持主界面红色气质。
+- **全平台统一**：主页、设置、播放页、歌曲详情共用同一套 `AmbientMeshBackground`。
+
+### 列表：去掉「聚拢玻璃卡」
+- 主页 / 设置页不再把整列套进一张大圆角毛玻璃卡，列表直接浮在流光背景上，屏幕区重新变得完整通透；
+- 选中行仍用一层离散的白色柔光（`cardSelection`），不采样 backdrop，滚动不会留下任何折射残影；
+- 随之删除 `glassCardSurface`、`rememberAmbientVeil` / `ambientTintOf`（旧「吸收封面色的暗蒙层」）
+  与 `GlassBlurConfig.backdropBlur` 死字段，噪点生成迁入 `MeshGradient.kt`。
+
+### 设置项
+- 「背景模糊度」→「背景流光」：档位 0~3 改为控制光团的扩散、亮度与整体压暗程度（不再有模糊可调）。
+
+## [5.2.0] - 2026-11-20
+
+### 材质与底层融合（第二轮）
+- **环境色蒙层**：主页 / 设置页背景暗蒙层由纯黑改为「吸收封面主色、亮度压到 ≤0.16 的极深色」，玻璃透出的背景更有色彩层次，不再是死灰遮罩；复用封面主色提取（偏好有饱和度且亮度适中的像素），与中性黑各半混合保证白字可读。
+- **细颗粒噪点**：背景层叠一层 alpha ≤6% 的固定种子细噪点（一次性生成、ImageShader 平铺），消除大面积模糊的「涂抹感」，让磨砂更接近真实玻璃颗粒；只画在背景层，绝不提亮玻璃盘。
+- **玻璃厚度暗示**：真玻璃盘用 `onDrawSurface` 叠一抹对角微光（alpha 峰值 0.07、55% 处归零、盘心完全透明、普通混合），暗示厚薄不均的光泽；刻意远低于整盘白填充，避免回到「磨砂不透明」。
+
+### 列表统一毛玻璃卡片
+- 主页 / 设置页列表由「逐行散浮 + 每行独立 lens 折射」改为**整列一张大圆角毛玻璃卡**（真实高斯模糊 + 温和提饱和）；选中态改为卡内纯色高亮，不再叠第二层玻璃——既消除「玻璃叠玻璃」的文字浑浊，也顺带彻底根除滑动时的折射残影。
+- 播放页列表仍沿用原有 `glassHighlight`（不同界面布局，不纳入本次卡片化）。
+
+### 稳定性
+- 全程未启用 `depthEffect`（v5.1.0 纯白盘根因）、未使用大面积 `BlendMode.Plus` 白渐变；玻璃中心保持清晰透出背景。
+- 全项目死 import 复扫 0 残留，编译通过。
+
+## [5.1.1] - 2026-11-20
+
+### 修复 · 滚轮变纯白不透明盘（5.1.0 严重视觉回归）
+- **现象**：5.1.0 装上后滚轮变成一块纯白实心圆盘，背景封面完全无法透出，比此前任何版本都差。
+- **根因（反编译库 shader 确认）**：5.1.0 首次开启 `lens(depthEffect = true)`，而库的折射着色器为
+  `grad = normalize(gradSdRoundedRect(...) + depthEffect * normalize(centeredCoord))`；
+  圆盘中心 `centeredCoord=(0,0)` 时 `normalize(0,0)` 产生 NaN，且 `refractionHeight=12px` 极小，
+  几乎整个盘面都落在折射区内 → 全盘采样被 NaN 污染 → 渲染成纯白。这是 5.1.0 独有的开关，
+  5.0.5 用默认 `depthEffect=false` 故从未出现。
+- **第二元凶**：真玻璃盘上叠加的自绘 Canvas「面部光泽」用了大半径 `radialGradient + BlendMode.Plus`，
+  会把整盘逐步提亮成白雾。
+- **修复**：
+  - `depthEffect` 恢复默认 `false`；物理厚度改由库默认 `highlight`（仅 0.5dp 轮廓、中心零绘制）提供；
+  - 移除整个动态光泽 Canvas 层与 `drawDynamicWheelOptics`；
+  - 保留安全的色彩增强 `colorControls(saturation=1.3)`（纯 ColorMatrix）、`blur(4dp)`、色散 `lens`；
+  - 删除随之空转的倾斜传感器（`TiltSensor.kt`/`Tilt.kt`）与 `tilt`/`press` 死参数，避免无效果耗电。
+- 保留 5.1.0 的按压缩放弹簧反馈（与玻璃高光无关）。
+
+## [5.1.0] - 2026-11-20
+
+### 重构 · 液态玻璃完整光学链 + 动态高光（逼近 iOS 26 Lens）
+- **背景**：5.0.5 为消除「磨砂不透明」把 blur 降到 1.5dp、删掉 vibrancy，虽清透但丢了玻璃的折射纵深与立体高光，观感回到「透明塑料圈」。本版按 Kyant0/backdrop 完整效果链重做，不改底层 shader，全部走库已有高阶 API。
+- **反编译核实（纠正此前误判）**：`Highlight.Default` 默认 `alpha=1.0 / width=0.5dp`、`Shadow.Default` 半径 24dp，**均可见**——此前「库默认高光阴影 alpha=0 不画」是字节码误读，导致多版未用库高光。`lens(h, a, depthEffect, chromaticAberration)` 两 bool 默认 false，此前只开了色散、丢了 `depthEffect`（物理纵深）。`blur(radius)` 单位 px。
+- **完整光学链（严格 color filter → blur → lens 顺序）**：
+  - `colorControls(saturation=1.35, contrast=1, brightness=1)`：温和提饱和保通透，替代 `vibrancy()`(固定 1.5×，发油发灰)；
+  - `blur(20px≈6.6dp)`：适度柔化压杂色，远小于磨砂版 8dp(≈24px)；
+  - `lens(12px, 24px, depthEffect=true, chromaticAberration=true)`：开启深度感（沿形状法线增强折射位移，产生物理厚度/挤压感）+ 边缘色散，shape 仍为 `RoundedCornerShape(50%)`（CornerBasedShape）。
+  - `highlight = Highlight.Default` 撑起边缘立体高光；`shadow` 用极轻 `alpha=0.12`（避免外圈脏影回归）。
+- **动态高光（新增）**：`util/TiltSensor.kt`（加速度计低通分离重力 + 阈值节流，无需权限、无传感器自动停用）+ `ui/components/Tilt.kt`（Compose `rememberTilt()` State）。真玻璃盘上叠加随倾斜移动的柔和面部光泽 + 原有菲涅尔/镜面弧切边，按压时 spring 增亮，产生「活」的反射与凝胶反馈；开关关闭/无 backdrop 时零开销降级。
+- **核验**：`compileReleaseKotlin` 通过；depthEffect shader（`RefractionWithDispersion`/`depthEffect` uniform）进包。
+
 ## [5.0.5] - 2026-11-20
 
 ### 修复 · 玻璃磨砂不透明：blur 超标 + vibrancy 提亮（反编译库定位）

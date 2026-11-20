@@ -33,8 +33,8 @@ android {
         // 低版本由库自动降级（不崩），无硬性 minSdk 抬升要求。
         minSdk = 23
         targetSdk = 34
-        versionCode = 142
-        versionName = "5.0.5"
+        versionCode = 148
+        versionName = "5.2.3"
     }
 
     signingConfigs {
@@ -106,6 +106,8 @@ dependencies {
     // 无需 AndroidView 桥接，从根上避免 View 库与 Compose RenderNode 的重入崩溃。
     // 版本对齐：backdrop 1.0.2 依赖 Kotlin 2.2.21 + Compose 1.10.0（BOM 2025.12.00）。
     implementation("io.github.kyant0:backdrop:1.0.2")
+    // Palette：从封面提取主色/鲜艳色/柔和色，用于生成「环境光」流光渐变背景。
+    implementation("androidx.palette:palette-ktx:1.0.0")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")

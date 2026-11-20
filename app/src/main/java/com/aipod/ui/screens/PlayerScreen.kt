@@ -1,7 +1,6 @@
 package com.aipod.ui.screens
 
 import android.content.res.Configuration
-import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -73,15 +72,12 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalConfiguration
@@ -107,9 +103,9 @@ import com.aipod.ui.components.CoverImage
 import com.aipod.ui.components.HiResBadge
 import com.aipod.ui.components.fadeInList
 import com.aipod.ui.components.glassHighlight
-import com.aipod.ui.components.glassBackdropSource
 import com.aipod.ui.components.rememberGlassBackdrop
 import com.aipod.ui.components.LocalGlassBackdrop
+import com.aipod.ui.components.AmbientMeshBackground
 import com.aipod.ui.components.rememberCoverBitmap
 import com.aipod.ui.theme.BrandRed
 import com.aipod.util.Haptics
@@ -988,90 +984,22 @@ private fun LandscapeControls(
 }
 
 /**
- * 播放页背景（Apple Music 风格）：整张封面铺满 + 真高斯模糊 + 主色调叠加 + 上下暗化渐变。
+ * 播放页背景（Apple Music 风格）：封面取色 → 环境光流光渐变。
  *
- * 2.0.4 之前用「封面降到 24×24 再拉伸」的缩放模糊来省性能，但放大后是明显的色块马赛克，
- * 完全没有 Apple Music 那种柔和、连续的磨砂质感。这里改回真 `Modifier.blur`：
- * - 用双线性插值放大到略大于屏幕（scale 1.16f），保证模糊后边缘不露底；
- * - 48dp 高斯模糊把封面细节揉成柔和色雾；
- * - 再叠一层从封面提取的主色调和上下暗化渐变，保证白色文字始终可读。
- * 切歌 260ms 交叉淡入，避免背景"啪"地换色。
+ * 与首页/设置共用同一套 [AmbientMeshBackground]：不再把整张封面糊一层铺满，而是取封面的
+ * 主色/鲜艳色/柔和色做三团缓慢游走的流光——颜色更干净、亮度可控，白字也不会糊。
+ * 播放页的大封面本身就在前景显示，背景再糊一张只是重复。
+ *
+ * 这一层同时作为滚轮玻璃的 backdrop 采样源（采样录制在组件内部完成）。
  */
 @Composable
 private fun CoverBackdrop(track: Track?) {
-    // 播放页背景：清晰封面（模糊度由设置控制）+ 主色调 + 上下暗化保证白字可读。
-    // 这一层同时作为滚轮的 backdrop 采样源（见文件底部 .glassBackdropSource）。
     val bitmap = rememberCoverBitmap(track?.coverUrl, track?.embeddedAudioUrl)
-    val backdropBlur = com.aipod.ui.components.LocalGlassBlurConfig.current.backdropBlur
-    val bgAlpha by animateFloatAsState(
-        targetValue = if (bitmap != null) 0.9f else 0f,
-        animationSpec = tween(durationMillis = 420),
-        label = "backdropAlpha"
+    AmbientMeshBackground(
+        bitmap = bitmap,
+        modifier = Modifier.fillMaxSize(),
+        fallback = BrandRed
     )
-    val dominant = remember(bitmap) {
-        val bmp = bitmap?.asAndroidBitmap()
-        val small = bmp?.let { runCatching { Bitmap.createScaledBitmap(it, 32, 32, true) }.getOrNull() }
-        small?.let { dominantColorOf(it) } ?: Color(0xFF2B2B31)
-    }
-    Box(Modifier.fillMaxSize().glassBackdropSource(LocalGlassBackdrop.current)) {
-        // —— 封面层：模糊度由「背景模糊度」档位控制 ——
-        Box(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize().background(Color(0xFF131316)))
-            if (bitmap != null) {
-                Image(
-                    bitmap = bitmap,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer { scaleX = 1.16f; scaleY = 1.16f }
-                        .blur(backdropBlur)
-                        .alpha(bgAlpha)
-                )
-            }
-        }
-        // —— 蒙层：主色调 + 上下暗化，保证白字可读 ——
-        Box(Modifier.fillMaxSize().background(dominant.copy(alpha = 0.34f)))
-        Box(
-            Modifier.fillMaxSize().background(
-                Brush.verticalGradient(
-                    listOf(Color.Black.copy(alpha = 0.24f), Color.Black.copy(alpha = 0.62f))
-                )
-            )
-        )
-    }
-}
-
-/** 取主色调：偏好「有饱和度且亮度适中」的像素，并与平均色混合避免过艳。 */
-private fun dominantColorOf(bmp: Bitmap): Color {
-    val w = bmp.width
-    val h = bmp.height
-    if (w <= 0 || h <= 0) return Color(0xFF2B2B31)
-    val px = IntArray(w * h)
-    bmp.getPixels(px, 0, w, 0, 0, w, h)
-    var r = 0L
-    var g = 0L
-    var b = 0L
-    var bestScore = -1f
-    var best = px[0]
-    for (p in px) {
-        val rr = (p shr 16) and 0xFF
-        val gg = (p shr 8) and 0xFF
-        val bb = p and 0xFF
-        val mx = max(rr, max(gg, bb))
-        val mn = min(rr, min(gg, bb))
-        val sat = if (mx == 0) 0f else (mx - mn).toFloat() / mx
-        val lum = (0.299f * rr + 0.587f * gg + 0.114f * bb) / 255f
-        val score = sat * (1f - kotlin.math.abs(lum - 0.55f))
-        if (score > bestScore) {
-            bestScore = score
-            best = p
-        }
-        r += rr; g += gg; b += bb
-    }
-    val n = px.size
-    val avg = Color((r / n).toInt(), (g / n).toInt(), (b / n).toInt())
-    return lerp(avg, Color(best), 0.55f)
 }
 
 /**

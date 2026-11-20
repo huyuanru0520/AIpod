@@ -442,7 +442,7 @@ private fun AppRoot() {
     }
 
     val accentArgb by MusicBoxApp.instance.accentColor.collectAsState()
-    // 液态玻璃：开关控制 backdrop 折射层是否绘制；背景模糊度是封面图自身的 blur，两者独立。
+    // 液态玻璃：开关控制 backdrop 折射层是否绘制；背景流光档位控制环境光浓度，两者独立。
     // 折射效果在低版本 Android 上由库自动降级，不会崩。
     val glassBlur by MusicBoxApp.instance.glassBlur.collectAsState()
     val glassBlurLevel by MusicBoxApp.instance.glassBlurLevel.collectAsState()

@@ -5,11 +5,11 @@ import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.colorControls
 import com.kyant.backdrop.effects.lens
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -83,32 +83,25 @@ import kotlin.math.sin
  *
  * - [enabled]：液态玻璃总开关（关闭时玻璃组件退化为普通半透明底）；
  * - [intensity]：光学层强度倍率；
- * - [backdropBlur]：**背景封面图自身的模糊度**（设置项「背景模糊度」控制），与玻璃折射无关。
+ * - [backdropLevel]：背景流光浓度档位（设置项「背景流光」控制，0 清透 ~ 3 浓郁）。
+ *
+ * 注：背景已从「模糊封面」改为「封面取色 + 动态流光」，组件不再需要模糊半径参数。
  */
 data class GlassBlurConfig(
     val enabled: Boolean,
     val intensity: Float,
-    val backdropBlur: Dp
+    val backdropLevel: Int = 2
 ) {
     companion object {
         /**
          * @param glassOn 液态玻璃开关
-         * @param backdropLevel 背景模糊档位 0~3：清晰 / 轻(6dp) / 中(16dp) / 重(32dp)
+         * @param backdropLevel 背景档位 0~3：清透 / 柔和 / 均衡 / 浓郁
          */
-        fun of(glassOn: Boolean, backdropLevel: Int): GlassBlurConfig {
-            val bblur = when (backdropLevel.coerceIn(0, 3)) {
-                0 -> 0.dp
-                1 -> 6.dp
-                2 -> 16.dp
-                3 -> 32.dp
-                else -> 16.dp
-            }
-            return GlassBlurConfig(
-                enabled = glassOn,
-                intensity = if (glassOn) 1f else 0f,
-                backdropBlur = bblur
-            )
-        }
+        fun of(glassOn: Boolean, backdropLevel: Int): GlassBlurConfig = GlassBlurConfig(
+            enabled = glassOn,
+            intensity = if (glassOn) 1f else 0f,
+            backdropLevel = backdropLevel.coerceIn(0, 3)
+        )
     }
 }
 
@@ -138,7 +131,7 @@ fun Modifier.glassBackdropSource(backdrop: LayerBackdrop?): Modifier =
  * 把 Compose [Shape] 转成 Canvas 可绘制的 [Path]。CircleShape / RoundedCornerShape /
  * 一般 Shape 都通过 createOutline 统一处理，参数是屏幕像素尺寸。
  */
-private fun DrawScope.shapePath(shape: Shape): Path {
+internal fun DrawScope.shapePath(shape: Shape): Path {
     val outline = shape.createOutline(size, LayoutDirection.Ltr, this)
     return when (outline) {
         is Outline.Rectangle -> Path().apply { addRect(outline.rect) }
@@ -377,22 +370,44 @@ fun GlassSurface(
 
     Box(
         if (useBackdrop) {
-            // 清透优先：blur 只做极轻微柔化（半径单位是 px），越大中心越糊——
-            // 上一版 8dp 把整盘背景糊成磨砂，是本问题的主因；官方示例仅 2dp。
-            // 不使用 vibrancy（饱和度×1.5）——它会把透出的背景染得油腻发白。
-            // lens 只在边缘做 SDF 折射位移 + 色散，中心不采样位移，故中心保持清晰。
-            // 参数对齐官方 LiquidButton：lens(12dp, 24dp)。
+            // 严格顺序：color filter → blur → lens（库渲染管线有依赖）。
+            // 关键修复（v5.1.1）：depthEffect 必须保持默认 false。库 shader 里
+            //   grad = normalize(gradSdRoundedRect + depthEffect * normalize(centeredCoord))
+            // 圆心 centeredCoord=(0,0) 时 normalize 产生 NaN，折射采样被污染成整盘纯白。
+            // 一律不用 depthEffect；边缘立体感交给库默认 highlight（仅轮廓 0.5dp、中心零绘制）。
             modifier.drawBackdrop(
                 backdrop = backdrop!!,
                 shape = { shape },
                 effects = {
-                    blur(1.5f.dp.toPx())
+                    // 温和提饱和，不用 vibrancy（固定 1.5×，发油发灰）；纯 ColorMatrix，安全。
+                    colorControls(saturation = 1.3f)
+                    // 半径单位是 px，用 dp.toPx() 与屏幕密度无关；4dp 远小于磨砂版 8dp。
+                    blur(4f.dp.toPx())
+                    // 与 5.0.5 已验证可透出背景的参数一致，仅开色散、不开 depthEffect。
                     lens(
-                        12f.dp.toPx(),               // refractionHeight ≤ 最小圆角半径
-                        24f.dp.toPx(),               // refractionAmount：边缘折射位移量
-                        chromaticAberration = true   // 边缘青/品红色散
+                        refractionHeight = 12f.dp.toPx(),
+                        refractionAmount = 24f.dp.toPx(),
+                        chromaticAberration = true
+                    )
+                },
+                // 厚度暗示：仅左上角一抹对角微光，55% 处归零、盘心完全透明。
+                // ★ 绝不做整盘白渐变填充——那正是「磨砂不透明」的成因。这里 alpha≤0.07、
+                // 普通混合（非 Plus），只让玻璃左上有一点厚薄不均的光泽，背景依然清晰透出。
+                onDrawSurface = {
+                    drawRect(
+                        brush = Brush.linearGradient(
+                            colorStops = arrayOf(
+                                0.00f to Color.White.copy(alpha = 0.07f),
+                                0.30f to Color.White.copy(alpha = 0.025f),
+                                0.55f to Color.Transparent,
+                                1.00f to Color.Transparent
+                            ),
+                            start = Offset(0f, 0f),
+                            end = Offset(size.width, size.height)
+                        )
                     )
                 }
+                // highlight/shadow 用库默认（与 5.0.5 一致，已验证不铺白）。
             )
         } else {
             modifier
@@ -409,6 +424,9 @@ fun GlassSurface(
                       else Modifier.liquidGlassLayer(shape, intensity))
         }
     ) {
+        // 注意：不在真玻璃盘上叠加自绘 Plus 白色光学层——大半径 radialGradient + Plus 会
+        // 把整盘提亮成白雾（v5.1.0 纯白盘的第二元凶）。边缘立体感完全交给库默认 highlight，
+        // 它只在轮廓 0.5dp 内画高光，中心零绘制，保持背景真实透出。
         content()
     }
 }

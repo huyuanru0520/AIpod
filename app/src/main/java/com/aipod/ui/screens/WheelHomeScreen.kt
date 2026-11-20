@@ -1,7 +1,5 @@
 package com.aipod.ui.screens
 
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -52,10 +50,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -73,9 +68,9 @@ import com.aipod.ui.components.CoverImage
 import com.aipod.ui.components.fadeEdges
 import com.aipod.ui.components.fadeInList
 import com.aipod.ui.components.glassHighlight
-import com.aipod.ui.components.glassBackdropSource
 import com.aipod.ui.components.rememberGlassBackdrop
 import com.aipod.ui.components.LocalGlassBackdrop
+import com.aipod.ui.components.AmbientMeshBackground
 import com.aipod.ui.components.rememberCoverBitmap
 import com.aipod.ui.theme.BrandRed
 import com.aipod.util.CrashLogger
@@ -462,9 +457,12 @@ internal fun WheelHome(
 }
 
 /**
- * 主页动态背景：
- * - 有正在播放曲目 → 取该曲目封面做真高斯模糊铺满，再叠一层半透明暗色保证白字可读；
- * - 无正在播放 → 中性「磨砂玻璃」：深灰底 + 柔和白色光斑 + 高斯模糊，不带任何彩色。
+ * 主页动态背景：封面取色 → 环境光流光渐变（详见 AmbientMeshBackground）。
+ *
+ * 不再把整张封面高斯模糊铺满——模糊封面既浑浊又有涂抹感，亮度也不可控。
+ * 现在从封面提取主色/鲜艳色/柔和色，生成三团缓慢游走的流光，颜色彼此交融，
+ * 配合前方液态玻璃滚轮，通透感和空间感都比一张糊图强得多。
+ * 无播放时用苹果红作为种子色，保持主界面的红色气质。
  *
  * 封面通过 [rememberCoverBitmap] 走同一份 LRU 缓存，加载完成自动刷新；不订阅进度流，
  * 因此切歌之外不会因每秒进度更新而重组。
@@ -472,57 +470,11 @@ internal fun WheelHome(
 @Composable
 private fun WheelBackdrop(current: com.aipod.data.Track?, red: Color) {
     val bmp = rememberCoverBitmap(current?.coverUrl, current?.embeddedAudioUrl)
-    val backdropBlur = com.aipod.ui.components.LocalGlassBlurConfig.current.backdropBlur
-    // 封面层：模糊度由设置「背景模糊度」档位控制；整块录制进 backdrop 供滚轮玻璃从同一实例采样，
-    // 暗蒙层作为兄弟节点压暗背景保证白字可读。
-    Box(Modifier.fillMaxSize().glassBackdropSource(LocalGlassBackdrop.current)) {
-      Box(Modifier.fillMaxSize()) {
-        if (bmp != null) {
-            Image(
-                bitmap = bmp,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { scaleX = 1.15f; scaleY = 1.15f }
-                    .blur(backdropBlur)
-            )
-        } else {
-            // 无播放：中性磨砂玻璃（深灰雾面 + 柔光斑 + 轻度模糊），不掺任何彩色
-            Canvas(
-                Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { scaleX = 1.12f; scaleY = 1.12f }
-                    .blur(14.dp)
-            ) {
-                val w = size.width
-                val h = size.height
-                drawRect(
-                    Brush.verticalGradient(
-                        listOf(Color(0xFF242428), Color(0xFF151517), Color(0xFF2A2A2F))
-                    )
-                )
-                // 两团中性白柔光，营造磨砂玻璃透光的层次（灰度，无彩色）
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        listOf(Color.White.copy(alpha = 0.10f), Color.Transparent)
-                    ),
-                    radius = maxOf(w, h) * 0.75f,
-                    center = Offset(w * 0.28f, h * 0.18f)
-                )
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        listOf(Color.White.copy(alpha = 0.05f), Color.Transparent)
-                    ),
-                    radius = maxOf(w, h) * 0.6f,
-                    center = Offset(w * 0.85f, h * 0.88f)
-                )
-            }
-        }
-      }
-      // 暗蒙层：压暗背景保证白字可读
-      Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.42f)))
-    }
+    AmbientMeshBackground(
+        bitmap = bmp,
+        modifier = Modifier.fillMaxSize(),
+        fallback = red
+    )
 }
 
 // ==================== 层级节点与条目 ====================
@@ -725,14 +677,24 @@ private fun WheelList(
         }
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        // 磨砂玻璃背景上统一用白字 / 白色高亮
+        // 环境光背景上统一用白字 / 白色高亮
         val fg = Color.White
         val rowShape = RoundedCornerShape(14.dp)
+        // 不再套「整列一张玻璃卡」：列表直接浮在流光背景上，屏幕区域保持完整通透；
+        // 选中行用和滚轮同款的真玻璃高亮（glassHighlight：离散挂载 + 轻 lens 折射），
+        // 不做整列玻璃卡，所以不会「玻璃叠玻璃」发灰，也不会在滚动时留残影。
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = 4.dp, vertical = 4.dp)
+                .fadeInList()
+                .fadeEdges(0.08f)
+        ) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize().fadeInList().fadeEdges(),
+            modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(4.dp),
-            contentPadding = PaddingValues(vertical = 24.dp)
+            contentPadding = PaddingValues(vertical = 20.dp)
         ) {
             // 稳定 key：按内容标识而非下标，避免 items 被等价列表替换时 2185 行全部重新组合。
             itemsIndexed(items, key = { _, item ->
@@ -746,7 +708,7 @@ private fun WheelList(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
+                        .padding(horizontal = 10.dp)
                         .glassHighlight(sel, rowShape)
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -781,6 +743,7 @@ private fun WheelList(
                     }
                 }
             }
+        }
         }
     }
 }

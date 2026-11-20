@@ -2,7 +2,6 @@ package com.aipod.ui.screens
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -36,11 +35,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -50,9 +46,9 @@ import com.aipod.data.Track
 import com.aipod.player.PlayerController
 import com.aipod.ui.components.ClickWheel
 import com.aipod.ui.components.fadeEdges
-import com.aipod.ui.components.glassBackdropSource
 import com.aipod.ui.components.rememberGlassBackdrop
 import com.aipod.ui.components.LocalGlassBackdrop
+import com.aipod.ui.components.AmbientMeshBackground
 import com.aipod.ui.components.rememberCoverBitmap
 import com.aipod.ui.theme.BrandRed
 import kotlinx.coroutines.launch
@@ -213,32 +209,17 @@ fun SongDetailScreen(navController: NavController) {
 }
 
 /**
- * 歌曲详情背景：与首页 WheelBackdrop 同款——当前封面真高斯模糊铺满 + 暗化蒙层，
- * 走 rememberCoverBitmap 的 LRU 缓存，切歌自动刷新。
+ * 歌曲详情背景：与首页/播放页同款——封面取色 + 动态流光渐变（详见 AmbientMeshBackground）。
+ * 封面走 rememberCoverBitmap 的 LRU 缓存，切歌自动刷新。
  */
 @Composable
 private fun SongDetailBackdrop(track: Track?) {
-    // 封面层 + 暗蒙层；整块录制进 backdrop，供兄弟节点的滚轮玻璃从同一实例采样。
-    Box(Modifier.fillMaxSize().glassBackdropSource(LocalGlassBackdrop.current)) {
-      Box(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().background(Color(0xFF151517)))
-        val bmp = rememberCoverBitmap(track?.coverUrl, track?.embeddedAudioUrl)
-        val backdropBlur = com.aipod.ui.components.LocalGlassBlurConfig.current.backdropBlur
-        if (bmp != null) {
-            Image(
-                bitmap = bmp,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { scaleX = 1.15f; scaleY = 1.15f }
-                    .blur(backdropBlur)
-            )
-        }
-      }
-      // 暗蒙层：保证白字可读
-      Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.42f)))
-    }
+    val bmp = rememberCoverBitmap(track?.coverUrl, track?.embeddedAudioUrl)
+    AmbientMeshBackground(
+        bitmap = bmp,
+        modifier = Modifier.fillMaxSize(),
+        fallback = Color(0xFF8E1F2B)
+    )
 }
 
 private fun buildMetaRows(track: Track?): List<MetaRow> {

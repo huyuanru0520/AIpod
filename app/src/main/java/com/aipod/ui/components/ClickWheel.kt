@@ -129,7 +129,6 @@ fun ClickWheel(
         animationSpec = spring(stiffness = 900f, dampingRatio = 0.7f),
         label = "wheelBottom"
     )
-
     Box(modifier.size(diameter)) {
         BoxWithConstraints(
             modifier = Modifier
@@ -279,7 +278,7 @@ fun ClickWheel(
                 tint = Color.White,
                 tintAlpha = if (dark) 0.09f else 0.46f,
                 elevation = 0.dp,
-                // 圆形滚轮：GlassSurface 内部会用 backdrop 库做真背景采样（有 backdrop 时），
+                // 圆形滚轮：GlassSurface 内部用 backdrop 库做真背景采样（有 backdrop 时），
                 // 否则退回 Canvas 窄环高光兜底。
                 blur = true,
                 circular = true

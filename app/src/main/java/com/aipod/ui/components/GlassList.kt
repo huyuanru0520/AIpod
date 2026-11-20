@@ -2,12 +2,15 @@ package com.aipod.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -16,7 +19,6 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.drawBackdrop
-import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
 
 /**
@@ -46,23 +48,54 @@ fun Modifier.glassHighlight(
     // 未选中 / 开关关闭：直接返回原 modifier，不挂任何绘制节点，零残留。
     if (!selected || intensity <= 0f) return this
 
-    // 有 backdrop：和滚轮同款真折射。lens 高度受限于最小圆角半径（列表项 12~14dp，取 6dp）。
+    // 有 backdrop：真折射透出背景。
+    //
+    // ★ 这里**绝不加 blur**。选中项看起来像"磨砂塑料板"的根因有两个，都在这几行里：
+    //   1) `blur(1dp)` 把背景糊成平均色，玻璃就没有"透过它看到东西"的依据了；
+    //   2) `drawRect(White alpha 0.10)` 是 srcOver 覆盖，白 alpha 会把彩色背景冲淡成灰雾。
+    //   现在只保留边缘 lens 折射 + 色散，中心 100% 透出背景原色；提亮改用 Screen 混合
+    //   （只抬亮度、不改色相），一眼看过去是"一块透明玻璃片"，而不是"一层灰白膜"。
     if (backdrop != null) {
         return this.drawBackdrop(
             backdrop = backdrop,
             shape = { shape },
             effects = {
-                // 清透优先：极小 blur + 边缘 lens，不用 vibrancy（避免发白油腻）。
-                blur(1f.dp.toPx())
-                lens(5f.dp.toPx(), 10f.dp.toPx(), chromaticAberration = true)
+                // lens 高度受限于列表项最小圆角半径（12~14dp，取 6dp）。
+                lens(6f.dp.toPx(), 12f.dp.toPx(), chromaticAberration = true)
             },
-            // 极淡提亮底提升可读性。不画任何黑描边，杜绝黑框。
-            onDrawSurface = { drawRect(tint.copy(alpha = 0.10f)) }
+            onDrawSurface = {
+                // 整体轻微提亮：Screen 不改色相，背景依旧鲜艳地透出来
+                drawRect(tint.copy(alpha = 0.07f), blendMode = BlendMode.Screen)
+                // 左上 → 右下的对角薄膜高光，与滚轮 onDrawSurface 同款，55% 处归零
+                drawRect(
+                    brush = Brush.linearGradient(
+                        0f to tint.copy(alpha = 0.14f),
+                        0.55f to Color.Transparent,
+                        start = Offset.Zero,
+                        end = Offset(size.width, size.height)
+                    ),
+                    blendMode = BlendMode.Screen
+                )
+                // 底部极淡反射线：暗示玻璃有厚度（不画黑描边，杜绝黑框）
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0.72f to Color.Transparent,
+                        1f to tint.copy(alpha = 0.07f)
+                    ),
+                    blendMode = BlendMode.Screen
+                )
+            }
         )
     }
 
-    // 无 backdrop 页面兜底：淡色底，不复用会留黑边的 Canvas 光学描边。
-    return this.background(tint.copy(alpha = 0.12f), shape)
+    // 无 backdrop 页面兜底：Screen 提亮底，不起白雾。
+    return this.drawBehind {
+        val path = shapePath(shape)
+        clipPath(path) {
+            drawRect(tint.copy(alpha = 0.10f), blendMode = BlendMode.Screen)
+        }
+        drawPath(path, tint.copy(alpha = 0.16f), style = Stroke(width = 1.dp.toPx()))
+    }
 }
 
 /**
