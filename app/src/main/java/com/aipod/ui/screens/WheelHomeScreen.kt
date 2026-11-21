@@ -473,7 +473,9 @@ private fun WheelBackdrop(current: com.aipod.data.Track?, red: Color) {
     AmbientMeshBackground(
         bitmap = bmp,
         modifier = Modifier.fillMaxSize(),
-        fallback = red
+        fallback = red,
+        // 用封面 URL 做缓存 key：从播放页切回来时直接命中上次的取色，不再闪兜底红
+        cacheKey = current?.coverUrl ?: current?.embeddedAudioUrl
     )
 }
 

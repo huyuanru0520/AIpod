@@ -33,8 +33,8 @@ android {
         // 低版本由库自动降级（不崩），无硬性 minSdk 抬升要求。
         minSdk = 23
         targetSdk = 34
-        versionCode = 148
-        versionName = "5.2.3"
+        versionCode = 158
+        versionName = "5.3.8"
     }
 
     signingConfigs {

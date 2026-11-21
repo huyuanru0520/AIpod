@@ -332,6 +332,48 @@ private fun DrawScope.drawWheelGlass(intensity: Float) {
         style = Stroke(width = 1.8f * unit),
         blendMode = BlendMode.Plus
     )
+
+    // (4) 极淡径向体积：中心完全透明、边缘微微发白，给整个圆环一点圆润的厚度感。
+    //     alpha 封顶 0.06，绝不在中心铺色，避免又糊成磨砂盘。
+    drawCircle(
+        brush = Brush.radialGradient(
+            colorStops = arrayOf(
+                0.00f to Color.Transparent,
+                0.62f to Color.Transparent,
+                0.88f to Color.White.copy(alpha = 0.035f * s),
+                1.00f to Color.White.copy(alpha = 0.06f * s)
+            ),
+            center = c, radius = r
+        ),
+        radius = r, center = c
+    )
+
+    // (5) 顶部 / 底部各一条模糊高光带：模拟圆环上下的圆润反光，用多段窄弧 + sin 包络淡入淡出。
+    //     顶部一条偏冷白、底部一条更弱偏暖，形成上下呼应而不对称的玻璃光泽。
+    val bandR = r - rim * 0.35f
+    drawArcBand(c, bandR, 188f, 344f, rim * 0.7f, Color.White, 0.16f * s, 5f, unit)
+    drawArcBand(c, bandR, 8f, 172f, rim * 0.55f, Color(0xFFFFF4E8), 0.09f * s, 5f, unit)
+}
+
+/** 沿圆环画一段带 sin 包络淡入淡出的柔光弧（用于顶部/底部高光带）。 */
+private fun DrawScope.drawArcBand(
+    c: Offset, radius: Float, startAngle: Float, endAngle: Float,
+    width: Float, color: Color, maxAlpha: Float, seg: Float, unit: Float
+) {
+    var ang = startAngle
+    while (ang < endAngle) {
+        val t = (ang - startAngle) / (endAngle - startAngle)
+        val env = sin(t * PI).toFloat().coerceAtLeast(0f)
+        drawArc(
+            color = color.copy(alpha = maxAlpha * env),
+            startAngle = ang, sweepAngle = seg + 0.6f,
+            useCenter = false,
+            topLeft = Offset(c.x - radius, c.y - radius),
+            size = Size(radius * 2f, radius * 2f),
+            style = Stroke(width = width, cap = StrokeCap.Round)
+        )
+        ang += seg
+    }
 }
 
 /** 圆形滚轮专用 Modifier：画在底色之上、内容之下，中心零绘制。 */

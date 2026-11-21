@@ -116,7 +116,6 @@ fun WheelSettingsScreen(navController: NavController) {
     val debugMode by app.debugMode.collectAsState()
     val showDescriptions by app.showDescriptions.collectAsState()
     val hapticStrength by app.hapticStrength.collectAsState()
-    val glassBlur by app.glassBlur.collectAsState()
     val glassBlurLevel by app.glassBlurLevel.collectAsState()
     val webDav by app.webDavConn.collectAsState()
     val fnos by app.fnosConn.collectAsState()
@@ -229,7 +228,7 @@ fun WheelSettingsScreen(navController: NavController) {
     // 构建当前页条目
     val items: List<SettingItem> = when (node) {
         SettingsNode.Root ->         buildRootSettings(
-            sourceMode, audioQuality, usbExclusive, usbHighGain, scanPace, hapticStrength, glassBlur, glassBlurLevel, debugMode, showDescriptions,
+            sourceMode, audioQuality, usbExclusive, usbHighGain, scanPace, hapticStrength, glassBlurLevel, debugMode, showDescriptions,
             webDav, fnos, webDavScanning, coverCacheSize, transcodeSize, localCount, localScanning, localScanProgress,
             !localFolderUri.isNullOrBlank()
         )
@@ -287,13 +286,6 @@ fun WheelSettingsScreen(navController: NavController) {
                 }
             }
             is SettingItem.Toggle -> when (item.key) {
-                "glassblur" -> scope.launch {
-                    val next = !glassBlur
-                    app.setGlassBlur(next)
-                    statusLine = if (next)
-                        "液态玻璃已开：折射高光 + 菲涅尔亮边 + 色散，滚轮/列表选中均生效"
-                    else "液态玻璃已关：仅保留半透明底"
-                }
                 "usbexclusive" -> scope.launch {
                     val next = !usbExclusive
                     app.setUsbExclusive(next)
@@ -477,9 +469,9 @@ fun WheelSettingsScreen(navController: NavController) {
                     val sub = when {
                         statusLine != null -> statusLine ?: ""
                         !showDescriptions -> ""
-                        node == SettingsNode.Tabs -> "中心键显示/隐藏 · 左右键调顺序"
+                        node == SettingsNode.Tabs -> "中心键显示/隐藏 · 长按左右键调顺序"
                         items.isEmpty() -> "转动滚轮操作"
-                        else -> "共 ${items.size} 项 · 中心键确认"
+                        else -> "共 ${items.size} 项 · 左右键上下行 · 中心键确认"
                     }
                     if (sub.isNotBlank()) {
                         Text(sub, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.75f),
@@ -532,10 +524,18 @@ fun WheelSettingsScreen(navController: NavController) {
                             launchSingleTop = true
                         }
                     },
-                    onPrevious = { if (node == SettingsNode.Tabs) moveTab(-1) else PlayerController.previous() },
-                    onNext = { if (node == SettingsNode.Tabs) moveTab(1) else PlayerController.next() },
-                    onRewind = { PlayerController.seekTo((PlayerController.currentPositionMs() - 5_000L).coerceAtLeast(0)) },
-                    onForward = { PlayerController.seekTo(PlayerController.currentPositionMs() + 5_000L) },
+                    // 短按左右键统一为「上下行」：左=上一行、右=下一行，不再触发切歌。
+                    onPrevious = { selected = (selected - 1).coerceIn(0, items.lastIndex) },
+                    onNext = { selected = (selected + 1).coerceIn(0, items.lastIndex) },
+                    // 长按：栏目页沿用「调顺序」，其它页为连续上下行（快速翻列表）
+                    onRewind = {
+                        if (node == SettingsNode.Tabs) moveTab(-1)
+                        else selected = (selected - 1).coerceIn(0, items.lastIndex)
+                    },
+                    onForward = {
+                        if (node == SettingsNode.Tabs) moveTab(1)
+                        else selected = (selected + 1).coerceIn(0, items.lastIndex)
+                    },
                     onMenu = { onWheelMenu() },
                     onMenuHome = { onWheelHome() },
                     onConfirm = { onWheelConfirm() }
@@ -582,7 +582,7 @@ private fun SettingItem.subtitle(): String = when (this) {
 
 private fun buildRootSettings(
     source: SourceMode, quality: AudioQuality, usbExclusive: Boolean, usbHighGain: Boolean,
-    scanPace: Long, haptic: Int, glassOn: Boolean, backdropLevel: Int, debug: Boolean, showDescriptions: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
+    scanPace: Long, haptic: Int, backdropLevel: Int, debug: Boolean, showDescriptions: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
     coverSize: Long, transcodeSize: Long, localCount: Int, localScanning: Boolean, localScanProgress: String,
     hasLocalFolder: Boolean
 ): List<SettingItem> {
@@ -612,13 +612,8 @@ private fun buildRootSettings(
     )
     out += SettingItem.Choice("scanpace", "扫描节奏", paceName, Icons.Default.Speed)
     out += SettingItem.Choice("haptic", "震动强度", hapticName, Icons.Default.Vibration)
-    // 液态玻璃开关（backdrop 折射）+ 背景流光浓度（环境光渐变，独立于开关）两个设置项。
-    out += SettingItem.Toggle(
-        "glassblur", "液态玻璃",
-        if (!glassOn) "关 · 仅半透明底" else "开 · 折射高光 + 菲涅尔亮边 + 色散",
-        Icons.Default.BlurOn
-    )
-    // 背景已从「模糊封面」改为「封面取色 + 动态流光」，这一项现在控制流光的扩散与浓度。
+    // 背景已从「模糊封面」改为「封面取色 + 动态流光」，这一项控制流光的扩散与浓度。
+    // 液态玻璃效果常驻开启，不再暴露开关。
     val backdropName = when (backdropLevel) {
         0 -> "清透 · 光斑收敛"
         1 -> "柔和"
@@ -793,6 +788,8 @@ private fun SettingsBackdrop(current: com.aipod.data.Track?, red: Color) {
     AmbientMeshBackground(
         bitmap = bmp,
         modifier = Modifier.fillMaxSize(),
-        fallback = red
+        fallback = red,
+        // 用封面 URL 做缓存 key：从播放页切回来时直接命中上次的取色，不再闪兜底红
+        cacheKey = current?.coverUrl ?: current?.embeddedAudioUrl
     )
 }

@@ -30,10 +30,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.colorControls
+import com.kyant.backdrop.effects.lens
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -50,6 +62,9 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
+import kotlin.math.min
+import kotlin.math.PI
+import kotlin.math.sin
 
 /**
  * 透明玻璃 iPod 点击轮。
@@ -327,41 +342,161 @@ fun ClickWheel(
                     )
                 }
 
-                // 中心 Home 键：上缘阴影、下缘高光，做成 iTouch 4 那种内凹，而不是凸起的玻璃珠。
-                // 浅色模式降低黑影不透明度、提高下缘白光，避免深灰圆斑糊在白轮体上。
-                val insetTop = if (centerActive) 0.58f else 0.42f
+                // 中心 Home 键：液态透明玻璃（不是黑色内凹圆）。
+                // 走 backdrop 真采样 + 16dp 背景模糊，让底部流光色柔和透出；
+                // 表面层只画「水透色底 + 左上亮/右下暗内阴影 + 渐变张力描边 + 极淡色散」，
+                // 中心保持通透。浅色模式降低整体强度避免白轮上的白雾。
+                val backdrop = LocalGlassBackdrop.current
+                val cfg = LocalGlassBlurConfig.current
+                val centerIntensity = if (cfg.enabled) cfg.intensity * (if (dark) 1f else 0.72f) else 0f
+                val centerShape = RoundedCornerShape(percent = 50)
                 Box(
                     Modifier
                         .align(Alignment.Center)
                         .size(d * 0.22f)
                         .scale(centerScale)
-                        .clip(CircleShape)
-                        .background(
-                            Brush.verticalGradient(
-                                0f to Color.Black.copy(alpha = if (dark) insetTop else insetTop * 0.55f),
-                                1f to Color.White.copy(alpha = if (dark) 0.14f else 0.85f)
-                            )
-                        )
-                        .border(1.dp, Color.White.copy(alpha = if (dark) 0.18f else 0.9f), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        Modifier
-                            .size(d * 0.19f)
-                            .clip(CircleShape)
-                            .background(
-                                Brush.radialGradient(
-                                    listOf(
-                                        Color.Black.copy(alpha = if (dark) 0.20f else 0.10f),
-                                        Color.Transparent
-                                    )
+                        .then(
+                            if (backdrop != null && centerIntensity > 0f) {
+                                // 与外圈滚轮完全相同的 backdrop 管线：真采样 + 轻模糊 + lens 边缘折射，
+                                // 背景清晰透出（中心只做内凹光影，不糊成磨砂）。depthEffect 保持默认 false——
+                                // 圆心 normalize(0,0)=NaN 会产生纯白盘，绝不能开。
+                                Modifier.drawBackdrop(
+                                    backdrop = backdrop,
+                                    shape = { centerShape },
+                                    effects = {
+                                        colorControls(saturation = 1.25f)
+                                        blur(4f.dp.toPx())
+                                        lens(
+                                            refractionHeight = 8f.dp.toPx(),
+                                            refractionAmount = 16f.dp.toPx(),
+                                            chromaticAberration = true
+                                        )
+                                    },
+                                    onDrawSurface = {
+                                        drawCenterGlassSurface(
+                                            intensity = centerIntensity,
+                                            active = centerActive,
+                                            unit = 1.dp.toPx()
+                                        )
+                                    }
                                 )
-                            )
-                    )
-                }
+                            } else {
+                                // 无 backdrop（首页未录制源 / 开关关闭）：兜底仍是水透色玻璃观感
+                                Modifier.drawBehind {
+                                    drawCircle(
+                                        Color.White.copy(alpha = 0.12f * centerIntensity),
+                                        radius = min(size.width, size.height) / 2f, center = center
+                                    )
+                                    drawCenterGlassSurface(
+                                        intensity = centerIntensity,
+                                        active = centerActive,
+                                        unit = 1.dp.toPx()
+                                    )
+                                }
+                            }
+                        )
+                )
             }
         }
     }
+}
+
+/**
+ * 中心 Home 键的液态玻璃表面层（画在 backdrop 模糊采样之上）。
+ *
+ * 结构（iTouch 式内凹 Home 键，光从左上打进凹槽——注意与「凸起玻璃珠」完全相反）：
+ *  1. 水透色底：极低透明白，中心透出背景（坑底）、边缘微亮（坑壁）；
+ *  2. 内阴影：左上内壁背光 → 暗（黑内阴影），右下内壁受光 → 亮（白反弹高光），
+ *     用「clip 到圆内 + 粗描边只留内侧一半」实现真正的内阴影；
+ *  3. 边缘张力高光：1px 描边同样是左上暗、右下亮，整体读作一个凹坑的唇边；
+ *  4. 色散：右下受光侧一段青→品红极淡 fringe，Plus 混合只提亮。
+ * [active] 按下时高光提亮一档，产生光泽「流动」感。
+ */
+private fun DrawScope.drawCenterGlassSurface(intensity: Float, active: Boolean, unit: Float) {
+    if (intensity <= 0f) return
+    val s = intensity * (if (active) 1.18f else 1f)
+    val c = center
+    val r = min(size.width, size.height) / 2f
+    val rim = r * 0.26f
+
+    // 1) 水透色底：凹坑底部（中心）更透、坑壁（边缘）微亮，极低透明白不做白雾
+    drawCircle(
+        brush = Brush.radialGradient(
+            colorStops = arrayOf(
+                0.00f to Color.White.copy(alpha = 0.08f * s),
+                0.64f to Color.White.copy(alpha = 0.11f * s),
+                1.00f to Color.White.copy(alpha = 0.17f * s)
+            ),
+            center = c, radius = r
+        ),
+        radius = r, center = c
+    )
+
+    // 2) 内凹厚度：clip 到圆内、粗描边只留内侧 → 左上暗（背光内壁）、右下亮（受光内壁）。
+    //    这正是「凹进去」与「凸玻璃珠」的分水岭：方向反了看起来就是凸起。
+    val circle = Path().apply { addOval(Rect(c.x - r, c.y - r, c.x + r, c.y + r)) }
+    clipPath(circle) {
+        // 左上暗内阴影：凹槽左上内壁被自身挡住光，聚一道深阴影
+        drawCircle(
+            brush = Brush.linearGradient(
+                colorStops = arrayOf(
+                    0.00f to Color.Black.copy(alpha = 0.42f * s),
+                    0.34f to Color.Black.copy(alpha = 0.12f * s),
+                    0.62f to Color.Transparent
+                ),
+                start = Offset(c.x - r, c.y - r),
+                end = Offset(c.x + r * 0.55f, c.y + r * 0.55f)
+            ),
+            center = c, radius = r,
+            style = Stroke(width = rim)
+        )
+        // 右下亮内高光：光穿过凹槽打在右下内壁，反弹一道柔白高光
+        drawCircle(
+            brush = Brush.linearGradient(
+                colorStops = arrayOf(
+                    0.00f to Color.Transparent,
+                    0.52f to Color.White.copy(alpha = 0.12f * s),
+                    1.00f to Color.White.copy(alpha = 0.55f * s)
+                ),
+                start = Offset(c.x - r * 0.55f, c.y - r * 0.55f),
+                end = Offset(c.x + r, c.y + r)
+            ),
+            center = c, radius = r,
+            style = Stroke(width = rim)
+        )
+    }
+
+    // 3) 唇边张力线：凹坑边缘同样左上暗、右下亮（右下 bounce 最强），整体读作凹陷
+    drawCircle(
+        brush = Brush.linearGradient(
+            colorStops = arrayOf(
+                0.00f to Color.Black.copy(alpha = 0.34f * s),
+                0.30f to Color.Black.copy(alpha = 0.08f * s),
+                0.66f to Color.White.copy(alpha = 0.10f * s),
+                1.00f to Color.White.copy(alpha = 0.62f * s)
+            ),
+            start = Offset(c.x - r, c.y - r),
+            end = Offset(c.x + r, c.y + r)
+        ),
+        radius = r - 0.7f * unit, center = c,
+        style = Stroke(width = 1.3f * unit)
+    )
+
+    // 4) 色散彩边：挪到右下受光侧，青→品红极淡，Plus 提亮
+    drawCircle(
+        brush = Brush.linearGradient(
+            colors = listOf(
+                Color.Transparent,
+                Color(0xFF8FE8FF).copy(alpha = 0.10f * s),
+                Color(0xFFFF9AD8).copy(alpha = 0.20f * s)
+            ),
+            start = Offset(c.x - r * 0.25f, c.y - r * 0.25f),
+            end = Offset(c.x + r, c.y + r)
+        ),
+        radius = r - 1.4f * unit, center = c,
+        style = Stroke(width = 1.8f * unit),
+        blendMode = BlendMode.Plus
+    )
 }
 
 private enum class WheelZone { NONE, TOP, LEFT, RIGHT, BOTTOM, CENTER }

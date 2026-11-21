@@ -1,6 +1,25 @@
 package com.aipod.ui.screens
 
 import android.content.res.Configuration
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipPath
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.drawPlainBackdrop
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.produceState
+import com.aipod.ui.components.rememberAmbientPalette
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -22,6 +41,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -998,13 +1018,29 @@ private fun CoverBackdrop(track: Track?) {
     AmbientMeshBackground(
         bitmap = bitmap,
         modifier = Modifier.fillMaxSize(),
-        fallback = BrandRed
+        fallback = BrandRed,
+        // 用封面 URL 做缓存 key：从别的页面切回来时直接命中上次的取色，不再闪兜底红
+        cacheKey = track?.coverUrl ?: track?.embeddedAudioUrl
     )
 }
 
 /**
- * 统一进度条：细轨道 + 小圆点滑块（替代 Material3 1.3 默认的 44dp 高竖条，避免上下突兀）。
- * 拖动时只更新本地值，松手才 seek。
+ * 液态玻璃进度条：胶囊底槽 + 缓冲层 + 流动液体 Fill + 玻璃水珠。
+ *
+ * 分层（都画在一条 7~10dp 的胶囊里）：
+ * - 底槽：极低透明度（10%）白/黑玻璃 + 真实背景模糊（drawPlainBackdrop blur）+ 顶部内阴影
+ *   + 上下 0.6px 极细描边（上亮下暗），是一层"浅浅的凹槽"而不是实心塑料底座；
+ * - 缓冲层：强调色 30% alpha；
+ * - Fill：70~80% 半透明、左暗右亮的强调色渐变（背景环境色透出）+ 横向游走光斑
+ *   + 顶部 1px 锐利白色高光实线；
+ * - Thumb：高透水珠（微弱白色径向渐变）+ 左上极小纯白高光点 + 右下暗边内阴影 + 极淡拖尾，
+ *   去掉了原来那圈像玩具塑料珠的均匀泛光。
+ *
+ * 交互：按下时整条从 7dp 变 10dp、底槽提亮；拖动时水珠按横向速度拉伸、纵向挤压，
+ * 松手用 spring 回弹。触控热区 36dp，视觉高度只有 7~10dp。
+ *
+ * 取色：复用 [rememberAmbientPalette] 的按封面 LRU 缓存，切页不闪兜底红；
+ * 强调色与底色亮度差不足时自动提亮/压暗，避免进度条在流光背景上隐形。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1015,79 +1051,135 @@ private fun SeekBar(
     inactiveColor: Color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.30f),
     thumbColor: Color = MaterialTheme.colorScheme.primary,
     labelColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
-    /** 进度模式：把红色进度标记加粗，作为「正在调进度」的就地反馈。 */
+    /** 进度模式：把进度标记加粗，作为「正在调进度」的就地反馈。 */
     emphasized: Boolean = false,
-    /** 滚轮调进度时的本地累积位置：非 null 时优先显示它，做到逐格跟手、不受 500ms 轮询滞后影响。 */
+    /** 滚轮调进度时的本地累积位置：非 null 时优先显示它，做到逐格跟手。 */
     wheelPosition: Long? = null,
     onSeek: (Long) -> Unit
 ) {
-    // 进度在此处自行订阅：500ms 的更新只会让这条进度条重组，不再牵动整页。
     val livePosition by PlayerController.position.collectAsState()
+    val buffered by PlayerController.buffered.collectAsState()
+
+    // 强调色跟着当前封面走。取色本身有 LRU 缓存，切页/重载不会重新算也不会闪红。
+    val queue by PlayerController.queue.collectAsState()
+    val idx by PlayerController.currentIndex.collectAsState()
+    val current = if (idx in queue.indices) queue[idx] else null
+    val coverKey = current?.coverUrl ?: current?.embeddedAudioUrl
+    val cover = rememberCoverBitmap(current?.coverUrl, current?.embeddedAudioUrl)
+    val palette = rememberAmbientPalette(cover, BrandRed, coverKey)
+    val accent = contrastingAccent(palette.primary, palette.base)
+    // 极端亮色封面时把玻璃反过来（黑槽 + 黑描边）；当前流光背景恒暗，这条是保险。
+    val glass = if (luma(palette.base) > 0.45f) Color.Black else Color.White
+
     var drag by remember(duration) { mutableStateOf<Float?>(null) }
-    // 乐观预览值：手指滑动松手后先固定显示目标位置，等真实进度追上来再交回实时显示。
-    // 避免「滑到新位置 → 松手瞬间跳回旧位置 → 500ms 后才刷新到新位置」的回跳（需求4）。
     var optimisticSeek by remember(duration) { mutableStateOf<Long?>(null) }
     LaunchedEffect(livePosition, optimisticSeek) {
         val target = optimisticSeek
-        if (target != null && kotlin.math.abs(livePosition - target) <= 700L) {
-            optimisticSeek = null   // 真实进度已追上目标，平滑交回实时显示
-        }
+        if (target != null && kotlin.math.abs(livePosition - target) <= 700L) optimisticSeek = null
     }
     LaunchedEffect(optimisticSeek) {
         if (optimisticSeek != null) {
             kotlinx.coroutines.delay(2500L)
-            optimisticSeek = null   // seek 失败/超时兜底，避免永久卡在预览值
+            optimisticSeek = null
         }
     }
     val maxRange = duration.coerceAtLeast(1).toFloat()
-    // 优先级：本地拖动 > 滚轮累积值 > 乐观预览 > 实时播放位置
     val displayMs = wheelPosition ?: optimisticSeek ?: livePosition
     val shown = drag ?: displayMs.toFloat().coerceIn(0f, maxRange)
-    val trackH = if (emphasized) 8.dp else 3.dp
-    val thumbS = if (emphasized) 16.dp else 10.dp
+
+    // 按压与拖拽形变
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val active = pressed || drag != null || wheelPosition != null
+    var stretch by remember { mutableFloatStateOf(1f) }
+    var tailDir by remember { mutableFloatStateOf(0f) }
+    var lastDragAt by remember { mutableLongStateOf(0L) }
+    var lastDragValue by remember { mutableFloatStateOf(0f) }
+    val stretchAnim by animateFloatAsState(
+        stretch, spring(dampingRatio = 0.5f, stiffness = 420f), label = "seekStretch"
+    )
+    val tailAnim by animateFloatAsState(
+        tailDir, spring(dampingRatio = 0.6f, stiffness = 340f), label = "seekTail"
+    )
+
+    // 液体光斑的横向游走：4.8s 一个来回，只重绘这条小进度条
+    val flow by produceState(0f) {
+        var t = 0f
+        while (true) {
+            t += 0.009f
+            if (t > 1f) t -= 1f
+            value = t
+            delay(60)
+        }
+    }
+
+    val trackH = if (active || emphasized) 10.dp else 7.dp
+    val thumbS = if (active || emphasized) 20.dp else 16.dp
+    val bufFrac = (buffered.toFloat() / maxRange).coerceIn(0f, 1f)
 
     Column(modifier.fillMaxWidth()) {
         Slider(
             value = shown,
-            onValueChange = { drag = it },
+            onValueChange = { v ->
+                val now = android.os.SystemClock.uptimeMillis()
+                val first = drag == null
+                val dt = (now - lastDragAt).coerceIn(1L, 120L)
+                // 第一次按下时 lastDragValue 还是 0，不能拿它算速度，否则水珠一按就被拉满
+                val delta = if (first) 0f else v - lastDragValue
+                val speed = if (first) 0f else kotlin.math.abs(delta) / dt
+                lastDragAt = now
+                lastDragValue = v
+                // 拖得越快拉伸越明显（上限 +26%，比之前更克制，避免像橡皮筋），纵向等量挤压
+                stretch = 1f + (speed * 150f).coerceIn(0f, 0.26f).toFloat()
+                tailDir = (delta * 900f).coerceIn(-1f, 1f)
+                drag = v
+            },
             onValueChangeFinished = {
                 drag?.let { target ->
                     optimisticSeek = target.toLong()
                     onSeek(target.toLong())
                 }
                 drag = null
+                stretch = 1f
+                tailDir = 0f
             },
             valueRange = 0f..maxRange,
-            modifier = Modifier.fillMaxWidth().height(26.dp),
+            interactionSource = interactionSource,
+            // 36dp 隐形触控热区，视觉仍只有 7~10dp
+            modifier = Modifier.fillMaxWidth().height(36.dp),
             thumb = {
                 Box(
                     Modifier
                         .size(thumbS)
-                        .clip(CircleShape)
-                        .background(thumbColor)
-                )
+                        .graphicsLayer {
+                            scaleX = stretchAnim
+                            scaleY = 1f / stretchAnim.coerceAtLeast(1f)
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        drawLiquidDroplet(center, size.minDimension / 2f, glass, tailAnim)
+                    }
+                }
             },
             track = { state ->
                 val range = state.valueRange
                 val frac = if (range.endInclusive > range.start)
-                    ((state.value - range.start) / (range.endInclusive - range.start))
-                        .coerceIn(0f, 1f)
+                    ((state.value - range.start) / (range.endInclusive - range.start)).coerceIn(0f, 1f)
                 else 0f
                 Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(trackH)
-                        .clip(CircleShape)
-                        .background(inactiveColor)
-                ) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth(frac)
-                            .fillMaxHeight()
-                            .clip(CircleShape)
-                            .background(activeColor)
+                    Modifier.liquidTrackModifier(
+                        backdrop = LocalGlassBackdrop.current,
+                        shape = RoundedCornerShape(percent = 50),
+                        frac = frac,
+                        bufFrac = bufFrac,
+                        accent = accent,
+                        glass = glass,
+                        active = active,
+                        flow = flow,
+                        height = trackH
                     )
-                }
+                )
             }
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1098,30 +1190,367 @@ private fun SeekBar(
 }
 
 /**
- * 音量条：进度条就地的 iPod 式替换。滚轮调音量时显示，值为 0..1。
- * 只读展示（音量由转轮调节），高亮段用品牌红，标签显示百分比。
+ * 液态轨道的四层绘制（底槽 / 缓冲 / Fill / 顶部高光），进度条与音量条共用。
+ *
+ * ★ 底槽的真实背景模糊由调用方 [drawPlainBackdrop] 的 effects 完成（只 blur、不 lens、
+ *   不带库默认高光阴影），这里只画极低透明度的玻璃层与描边——避免「玻璃叠玻璃」发灰。
+ *
+ * @param frac 已播放比例 0..1
+ * @param bufFrac 缓冲比例 0..1（音量条传 0）
+ * @param accent 强调色（进度条取封面色，音量条用品牌红）
+ * @param glass 玻璃基色（亮底反相为黑，暗底为白）
+ * @param active 按压/拖拽态：底槽提亮
+ */
+private fun DrawScope.drawLiquidTrack(
+    frac: Float,
+    bufFrac: Float,
+    accent: Color,
+    glass: Color,
+    active: Boolean,
+    flow: Float
+) {
+    val w = size.width
+    val h = size.height
+    val rr = h / 2f
+    val radius = CornerRadius(rr, rr)
+
+    // 1) 底槽：极低透明度的磨砂凹槽（背景模糊来自 drawPlainBackdrop）
+    drawRoundRect(glass.copy(alpha = if (active) 0.16f else 0.10f), cornerRadius = radius)
+    // 顶部内阴影：极弱，制造凹陷
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            0f to Color.Black.copy(alpha = 0.12f),
+            0.40f to Color.Transparent
+        ),
+        cornerRadius = radius
+    )
+    // 2) 上下极细描边：上亮下暗，像玻璃表面的一层浅凹槽
+    drawLine(
+        color = glass.copy(alpha = 0.34f),
+        start = Offset(rr, 0.6f), end = Offset(w - rr, 0.6f),
+        strokeWidth = 0.6f
+    )
+    drawLine(
+        color = glass.copy(alpha = 0.10f),
+        start = Offset(rr, h - 0.6f), end = Offset(w - rr, h - 0.6f),
+        strokeWidth = 0.6f
+    )
+
+    // 3) 缓冲层：未播放区域的 30% 强调色
+    if (bufFrac > frac + 0.005f) {
+        drawRoundRect(
+            color = accent.copy(alpha = 0.30f),
+            size = Size(w * bufFrac, h),
+            cornerRadius = radius
+        )
+    }
+
+    val fw = w * frac
+    if (fw > 1f) {
+        // 4) Fill：70~80% 半透明的左暗右亮渐变，让背景环境色透进来（玻璃折射感）
+        drawRoundRect(
+            brush = Brush.horizontalGradient(
+                listOf(
+                    darken(accent, 0.72f).copy(alpha = 0.72f),
+                    accent.copy(alpha = 0.80f)
+                ),
+                startX = 0f, endX = fw
+            ),
+            size = Size(fw, h),
+            cornerRadius = radius
+        )
+        // 缓慢横向游走的光斑（液体流动）
+        val shift = (flow * 1.6f - 0.3f) * fw
+        drawRoundRect(
+            brush = Brush.horizontalGradient(
+                listOf(Color.Transparent, accent.copy(alpha = 0.22f), Color.Transparent),
+                startX = shift - fw * 0.35f, endX = shift + fw * 0.35f
+            ),
+            size = Size(fw, h),
+            cornerRadius = radius,
+            blendMode = BlendMode.Screen
+        )
+    }
+
+    // 5) 顶部锐利高光：1px 实线，只在最顶部，贯穿底槽与已播放部分
+    drawLine(
+        brush = Brush.horizontalGradient(
+            listOf(
+                glass.copy(alpha = 0.28f),
+                Color.White.copy(alpha = 0.72f),
+                Color.White.copy(alpha = 0.42f),
+                glass.copy(alpha = 0.14f)
+            )
+        ),
+        start = Offset(rr, 1.2f), end = Offset(w - rr, 1.2f),
+        strokeWidth = 1f
+    )
+}
+
+/**
+ * 水珠 Thumb：中心完全透出下方 Fill，只在边缘做菲涅尔折射。
+ *
+ * 之前那颗"塑料珠"的假感来自两处：①整圈均匀的 accent 描边；②中心一团白雾。
+ * 现在改为——中心透明、边缘由内到外微微提亮（光在珠体边缘折射增厚），
+ * 再叠一段左上锐利亮弧 + 一段右下极淡暗弧（光从左上打来的方向感），
+ * 配一颗左上小高光点与右下环境反光点。没有均匀外环、没有白心。
+ *
+ * @param tail 拖拽方向带符号的形变（-1..1），0 为静止（音量条端点传 0）
+ */
+private fun DrawScope.drawLiquidDroplet(
+    c: Offset,
+    r: Float,
+    glass: Color,
+    tail: Float
+) {
+    val u = 1.dp.toPx()
+    // 0) 拖拽粘性拖尾（很淡，只在真正拖动时出现）
+    val t = kotlin.math.abs(tail)
+    if (t > 0.02f) {
+        drawRoundRect(
+            brush = Brush.horizontalGradient(
+                listOf(
+                    Color.Transparent,
+                    glass.copy(alpha = 0.11f * t),
+                    Color.Transparent
+                )
+            ),
+            topLeft = Offset(
+                if (tail > 0) c.x - r * 2.8f else c.x - r * 0.2f,
+                c.y - r * 0.38f
+            ),
+            size = Size(r * 3f, r * 0.76f),
+            cornerRadius = CornerRadius(r * 0.38f, r * 0.38f)
+        )
+    }
+
+    val circle = androidx.compose.ui.graphics.Path().apply {
+        addOval(androidx.compose.ui.geometry.Rect(c.x - r, c.y - r, c.x + r, c.y + r))
+    }
+
+    // 1) 玻璃体液：中心透明（透出下方 Fill），边缘菲涅尔渐亮；叠一层极淡水透色底给体积。
+    drawCircle(
+        brush = Brush.radialGradient(
+            colorStops = arrayOf(
+                0.00f to glass.copy(alpha = 0.05f),
+                0.52f to glass.copy(alpha = 0.03f),
+                0.80f to glass.copy(alpha = 0.10f),
+                0.93f to glass.copy(alpha = 0.20f),
+                1.00f to glass.copy(alpha = 0.32f)
+            ),
+            center = c, radius = r
+        ),
+        radius = r, center = c
+    )
+
+    // 2) 弯月面：clip 到珠体内，上缘一道亮内阴影、下缘一道暗，让液滴「鼓」起来。
+    clipPath(circle) {
+        val rim = r * 0.5f
+        drawCircle(
+            brush = Brush.linearGradient(
+                colorStops = arrayOf(
+                    0.00f to Color.White.copy(alpha = 0.42f),
+                    0.40f to Color.White.copy(alpha = 0.06f),
+                    0.70f to Color.Transparent
+                ),
+                start = Offset(c.x - r, c.y - r),
+                end = Offset(c.x + r * 0.4f, c.y + r * 0.4f)
+            ),
+            center = c, radius = r, style = Stroke(width = rim)
+        )
+        drawCircle(
+            brush = Brush.linearGradient(
+                colorStops = arrayOf(
+                    0.00f to Color.Transparent,
+                    0.55f to Color.Black.copy(alpha = 0.04f),
+                    1.00f to Color.Black.copy(alpha = 0.20f)
+                ),
+                start = Offset(c.x - r * 0.4f, c.y - r * 0.4f),
+                end = Offset(c.x + r, c.y + r)
+            ),
+            center = c, radius = r, style = Stroke(width = rim)
+        )
+    }
+
+    // 3) 色散彩边：左上一段极淡青→品红 fringe（spherochromatism），Plus 只提亮。
+    drawCircle(
+        brush = Brush.linearGradient(
+            colors = listOf(
+                Color(0xFF8FE8FF).copy(alpha = 0.34f),
+                Color(0xFFFF9AD8).copy(alpha = 0.16f),
+                Color.Transparent
+            ),
+            start = Offset(c.x - r, c.y - r),
+            end = Offset(c.x + r * 0.3f, c.y + r * 0.3f)
+        ),
+        radius = r - 0.9f * u, center = c,
+        style = Stroke(width = 1.7f * u), blendMode = BlendMode.Plus
+    )
+
+    // 4) 边缘张力线：1px 极细、不均匀的描边，左上全白 → 右下透明，底部留一道 bounce。
+    drawCircle(
+        brush = Brush.linearGradient(
+            colorStops = arrayOf(
+                0.00f to Color.White.copy(alpha = 0.92f),
+                0.32f to Color.White.copy(alpha = 0.34f),
+                0.68f to Color.White.copy(alpha = 0.06f),
+                1.00f to Color.White.copy(alpha = 0.50f)
+            ),
+            start = Offset(c.x - r, c.y - r),
+            end = Offset(c.x + r, c.y + r)
+        ),
+        radius = r - 0.6f * u, center = c,
+        style = Stroke(width = 1.1f * u)
+    )
+
+    // 5) 左上锐利高光点：柔光晕 + 双层高光核（大白点 + 更小的纯白核），近看才有层次。
+    val hl = Offset(c.x - r * 0.31f, c.y - r * 0.34f)
+    drawCircle(
+        brush = Brush.radialGradient(
+            listOf(Color.White.copy(alpha = 0.40f), Color.Transparent),
+            center = hl, radius = r * 0.34f
+        ),
+        radius = r * 0.34f, center = hl
+    )
+    drawCircle(color = Color.White.copy(alpha = 0.88f), radius = r * 0.13f, center = hl)
+    drawCircle(color = Color.White.copy(alpha = 0.98f), radius = r * 0.07f,
+        center = Offset(hl.x - r * 0.02f, hl.y - r * 0.02f))
+
+    // 6) 右下环境反光点：底部透进来的背景光斑 + 一颗极小的次级高光核。
+    val gl = Offset(c.x + r * 0.33f, c.y + r * 0.40f)
+    drawCircle(
+        brush = Brush.radialGradient(
+            listOf(glass.copy(alpha = 0.22f), Color.Transparent),
+            center = gl, radius = r * 0.30f
+        ),
+        radius = r * 0.30f, center = gl
+    )
+    drawCircle(color = glass.copy(alpha = 0.34f), radius = r * 0.055f, center = gl)
+
+    // 7) 底部焦散弧：一道极窄的反光弧，模拟液滴底部的光线汇聚。
+    drawArc(
+        brush = Brush.linearGradient(
+            listOf(
+                Color.Transparent,
+                Color.White.copy(alpha = 0.40f),
+                Color.Transparent
+            ),
+            start = Offset(c.x - r * 0.55f, c.y + r * 0.7f),
+            end = Offset(c.x + r * 0.55f, c.y + r * 0.7f)
+        ),
+        startAngle = 42f, sweepAngle = 96f, useCenter = false,
+        topLeft = Offset(c.x - r * 0.82f, c.y - r * 0.82f),
+        size = Size(r * 1.64f, r * 1.64f),
+        style = Stroke(width = 1.2f * u, cap = StrokeCap.Round)
+    )
+}
+
+/** 给轨道挂真实背景模糊（只 blur 不 lens），返回已绘制四层的 Modifier。 */
+private fun Modifier.liquidTrackModifier(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop?,
+    shape: Shape,
+    frac: Float,
+    bufFrac: Float,
+    accent: Color,
+    glass: Color,
+    active: Boolean,
+    flow: Float,
+    height: Dp
+): Modifier {
+    val base = this.fillMaxWidth().height(height)
+    if (backdrop == null) {
+        return base.drawBehind { drawLiquidTrack(frac, bufFrac, accent, glass, active, flow) }
+    }
+    return base.drawPlainBackdrop(
+        backdrop = backdrop,
+        shape = { shape },
+        effects = { blur(4f.dp.toPx()) },
+        onDrawSurface = { drawLiquidTrack(frac, bufFrac, accent, glass, active, flow) }
+    )
+}
+
+/** 强调色太接近底色时自动拉开至少三个色阶（亮度差 0.25），避免进度条隐形。 */
+private fun contrastingAccent(accent: Color, background: Color): Color {
+    val av = luma(accent)
+    val bv = luma(background)
+    if (kotlin.math.abs(av - bv) >= 0.25f) return accent
+    val target = if (bv < 0.5f) (av + 0.34f).coerceAtMost(0.95f) else (av - 0.34f).coerceAtLeast(0.20f)
+    if (target == av) return accent
+    val k = target / av.coerceAtLeast(0.01f)
+    return Color(
+        (accent.red * k).coerceIn(0f, 1f),
+        (accent.green * k).coerceIn(0f, 1f),
+        (accent.blue * k).coerceIn(0f, 1f),
+        accent.alpha
+    )
+}
+
+private fun luma(c: Color): Float = 0.2126f * c.red + 0.7152f * c.green + 0.0722f * c.blue
+
+private fun darken(c: Color, factor: Float): Color =
+    Color(c.red * factor, c.green * factor, c.blue * factor, c.alpha)
+
+/**
+ * 音量条：与播放进度条完全同源的液态玻璃——封面取色渐变 Fill + 真实背景模糊底槽
+ * + 顶部锐利高光 + 缓慢流光 + 同款水珠端点；音量由转轮调节，这里只读展示百分比。
  */
 @Composable
 private fun VolumeBar(volume: Float) {
-    val v = volume.coerceIn(0f, 1f)
-    val a by animateFloatAsState(targetValue = 1f, animationSpec = tween(160), label = "volBar")
-    Column(Modifier.fillMaxWidth().alpha(a)) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(8.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.22f))
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth(v)
-                    .fillMaxHeight()
-                    .clip(CircleShape)
-                    .background(BrandRed)
-            )
+    val v by animateFloatAsState(
+        targetValue = volume.coerceIn(0f, 1f),
+        animationSpec = spring(dampingRatio = 0.75f, stiffness = 330f),
+        label = "volBarFill"
+    )
+    // 与进度条同源：封面取色 + 缓存，切页不闪、颜色统一
+    val queue by PlayerController.queue.collectAsState()
+    val idx by PlayerController.currentIndex.collectAsState()
+    val current = if (idx in queue.indices) queue[idx] else null
+    val coverKey = current?.coverUrl ?: current?.embeddedAudioUrl
+    val cover = rememberCoverBitmap(current?.coverUrl, current?.embeddedAudioUrl)
+    val palette = rememberAmbientPalette(cover, BrandRed, coverKey)
+    val accent = contrastingAccent(palette.primary, palette.base)
+    val glass = if (luma(palette.base) > 0.45f) Color.Black else Color.White
+    // 与进度条一致的缓慢流光，只重绘这一小条
+    val flow by produceState(0f) {
+        var t = 0f
+        while (true) {
+            t += 0.009f
+            if (t > 1f) t -= 1f
+            value = t
+            delay(60)
         }
-        Spacer(Modifier.height(2.dp))
+    }
+
+    val thumbS = 15.dp
+    Column(Modifier.fillMaxWidth()) {
+        BoxWithConstraints(
+            Modifier.fillMaxWidth().height(36.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            val trackW = maxWidth
+            Box(
+                Modifier.liquidTrackModifier(
+                    backdrop = LocalGlassBackdrop.current,
+                    shape = RoundedCornerShape(percent = 50),
+                    frac = v,
+                    bufFrac = 0f,
+                    accent = accent,
+                    glass = glass,
+                    active = false,
+                    flow = flow,
+                    height = 8.dp
+                )
+            )
+            // 与进度条同款水珠端点（静止，不响应拖拽）
+            Box(
+                Modifier.offset(x = (trackW - thumbS) * v).size(thumbS),
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(Modifier.fillMaxSize()) {
+                    drawLiquidDroplet(center, size.minDimension / 2f, glass, 0f)
+                }
+            }
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("音量", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.6f))
             Text("${(v * 100).toInt()}%", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.6f))

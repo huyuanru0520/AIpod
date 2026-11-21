@@ -198,9 +198,41 @@ private fun ambientPaletteOf(bmp: Bitmap, fallback: Color): AmbientPalette {
     return buildPalette(vibColor, darkColor, lightColor, Color(dominant.rgb))
 }
 
-/** 取封面环境色（异步，切歌自动重新取）；同一张封面只算一次。 */
+/**
+ * 取色结果缓存。
+ *
+ * 为什么必须有：从播放页切回主界面时，`WheelHomeScreen` 是一套**全新的组合**，
+ * produceState 会从 initialValue 重新开始——而 initialValue 是兜底色（主题红）。
+ * 异步取色算完之前，背景就会先红一下再变回封面色。把算好的结果按封面 key 存下来，
+ * 新组合直接命中缓存作为初值，这一闪就没了。
+ *
+ * [last] 是"最近一次成功的取色"：切到一首还没算过的新歌时先用它顶着，
+ * 保证画面任何时刻都是彩色渐变，不会退回主题红（除非冷启动第一首）。
+ */
+private object AmbientPaletteStore {
+    private val cache = android.util.LruCache<String, AmbientPalette>(12)
+
+    @Volatile
+    var last: AmbientPalette? = null
+
+    fun get(key: String?): AmbientPalette? {
+        if (key == null) return null
+        return runCatching { cache.get(key) }.getOrNull()
+    }
+
+    fun put(key: String?, palette: AmbientPalette) {
+        last = palette
+        if (key != null) runCatching { cache.put(key, palette) }
+    }
+}
+
+/** 取封面环境色（异步，切歌自动重新取）；同一张封面只算一次，结果进 [AmbientPaletteStore]。 */
 @Composable
-fun rememberAmbientPalette(bitmap: ImageBitmap?, fallback: Color): AmbientPalette {
+fun rememberAmbientPalette(
+    bitmap: ImageBitmap?,
+    fallback: Color,
+    cacheKey: String? = null
+): AmbientPalette {
     val fb = remember(fallback) { fallbackPalette(fallback) }
     // ★ 关键修复（"背景一直不变色"的根因）：CoverStore 每次重组都会新建一个 ImageBitmap 包装对象，
     //   如果直接拿它当 produceState 的 key，每次重组都会重启取色协程——播放中每秒都有进度/状态刷新，
@@ -209,15 +241,27 @@ fun rememberAmbientPalette(bitmap: ImageBitmap?, fallback: Color): AmbientPalett
     val src: Bitmap? = remember(bitmap) {
         bitmap?.let { runCatching { it.asAndroidBitmap() }.getOrNull() }
     }
-    val state = produceState(fb, src, fallback) {
+    // 初值优先级：这张封面的缓存 → 最近一次成功的取色 → 兜底色。
+    // 有了前两级，切页/切歌都不会先闪一下主题红（只有冷启动第一首才会用到兜底色）。
+    val seed = remember(cacheKey, src, fb) {
+        AmbientPaletteStore.get(cacheKey) ?: AmbientPaletteStore.last ?: fb
+    }
+    val state = produceState(seed, src, cacheKey, fallback) {
         if (src == null) {
-            value = fb
+            value = AmbientPaletteStore.get(cacheKey) ?: AmbientPaletteStore.last ?: fb
+            return@produceState
+        }
+        // 这张封面算过：直接命中，不再起协程、不再闪
+        val hit = AmbientPaletteStore.get(cacheKey)
+        if (hit != null) {
+            value = hit
             return@produceState
         }
         // 保留旧色直到新色算完，切歌时是平滑过渡而不是先闪回兜底红
         value = withContext(Dispatchers.Default) {
             runCatching { ambientPaletteOf(src, fallback) }
                 .onSuccess {
+                    AmbientPaletteStore.put(cacheKey, it)
                     CrashLogger.info(
                         "Mesh",
                         "封面取色 base=${hex(it.base)} primary=${hex(it.primary)} " +
@@ -225,9 +269,10 @@ fun rememberAmbientPalette(bitmap: ImageBitmap?, fallback: Color): AmbientPalett
                     )
                 }
                 .onFailure {
+                    // 失败不入缓存：下次进来还要再试，不能把兜底色写死
                     CrashLogger.info("Mesh", "取色失败，退回兜底色：${it.javaClass.simpleName}: ${it.message}")
                 }
-                .getOrDefault(fb)
+                .getOrDefault(AmbientPaletteStore.last ?: fb)
         }
     }
     return state.value
@@ -268,14 +313,16 @@ private fun DrawScope.drawGrain() {
  *
  * @param bitmap 当前曲目封面（null 则用 [fallback] 主题色兜底）
  * @param fallback 无封面时的种子色（首页/设置传苹果红）
+ * @param cacheKey 封面唯一标识（coverUrl 优先），用于跨页面复用取色结果，避免切页时闪兜底色
  */
 @Composable
 fun AmbientMeshBackground(
     bitmap: ImageBitmap?,
     modifier: Modifier = Modifier,
-    fallback: Color = Color(0xFF2B2B31)
+    fallback: Color = Color(0xFF2B2B31),
+    cacheKey: String? = null
 ) {
-    val extracted = rememberAmbientPalette(bitmap, fallback)
+    val extracted = rememberAmbientPalette(bitmap, fallback, cacheKey)
     // 切歌/封面加载完成时颜色不要"啪"地一跳：五色各自 600ms 过渡。
     // 这些 State 只在 draw 里读，过渡期间的逐帧变化只触发重绘、不触发重组。
     val baseS = animateColorAsState(extracted.base, tween(600), label = "meshBase")

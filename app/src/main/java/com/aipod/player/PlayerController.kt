@@ -90,6 +90,10 @@ object PlayerController {
     private val _duration = MutableStateFlow(0L)
     val duration = _duration.asStateFlow()
 
+    /** 已缓冲位置：进度条的缓冲层用它（不触发整页重组，只由 SeekBar 自己订阅）。 */
+    private val _buffered = MutableStateFlow(0L)
+    val buffered = _buffered.asStateFlow()
+
     private val _repeatMode = MutableStateFlow(Player.REPEAT_MODE_OFF)
     val repeatMode = _repeatMode.asStateFlow()
 
@@ -387,6 +391,7 @@ object PlayerController {
                     player?.let {
                         _position.value = it.currentPosition.coerceAtLeast(0)
                         _duration.value = it.duration.coerceAtLeast(0)
+                        _buffered.value = it.bufferedPosition.coerceAtLeast(0)
                     }
                 }
                 // 播放进度节流落盘：最多每 4 秒一次，进程被杀时最多丢 4 秒进度

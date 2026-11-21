@@ -218,7 +218,8 @@ private fun SongDetailBackdrop(track: Track?) {
     AmbientMeshBackground(
         bitmap = bmp,
         modifier = Modifier.fillMaxSize(),
-        fallback = Color(0xFF8E1F2B)
+        fallback = Color(0xFF8E1F2B),
+        cacheKey = track?.coverUrl ?: track?.embeddedAudioUrl
     )
 }
 
