@@ -43,7 +43,7 @@ AIpod 不建索引库、不依赖服务端插件，直接用 WebDAV 协议扫你
 
 ## 截图
 
-| 播放页（点击轮） | 横屏 CoverFlow |
+| 播放页 | 专辑页 CoverFlow（唱片架） |
 | --- | --- |
 | ![播放页](docs/screenshots/player.png) | ![CoverFlow](docs/screenshots/coverflow.png) |
 
