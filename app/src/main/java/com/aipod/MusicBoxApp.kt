@@ -203,6 +203,11 @@ class MusicBoxApp : Application() {
     /** 设置页是否显示各条目的说明文字（副标题），默认显示；可在设置里一键隐藏。 */
     val showDescriptions = MutableStateFlow(true)
     /**
+     * 封面倒影是否随手机倾斜产生视差（默认开）。播放页与专辑页共用：
+     * 关闭后倒影仍显示，但固定不动、不接重力传感器。
+     */
+    val reflectionTilt = MutableStateFlow(true)
+    /**
      * 转轮震动强度：0=关闭，1=弱，2=中，3=强。默认中档（2）。
      * 设置页可调，Haptics 每次触发时读取此值换算实际幅度。
      */
@@ -593,6 +598,8 @@ class MusicBoxApp : Application() {
         CrashLogger.setEnabled(dbg)
         // 说明文字显隐（默认显示）
         showDescriptions.value = p[T_SHOW_DESC] ?: true
+        // 封面倒影随动（默认开）
+        reflectionTilt.value = p[T_REFLECTION_TILT] ?: true
         // 震动强度（0-3，默认中档 2），同步给 Haptics
         hapticStrength.value = (p[T_HAPTIC] ?: 2).coerceIn(0, 3)
         Haptics.setStrength(hapticStrength.value)
@@ -780,6 +787,12 @@ class MusicBoxApp : Application() {
     suspend fun setShowDescriptions(on: Boolean) {
         showDescriptions.value = on
         dataStore.edit { it[T_SHOW_DESC] = on }
+    }
+
+    /** 封面倒影随手机倾斜视差开关：持久化。 */
+    suspend fun setReflectionTilt(on: Boolean) {
+        reflectionTilt.value = on
+        dataStore.edit { it[T_REFLECTION_TILT] = on }
     }
 
     /** 设置转轮震动强度（0=关 / 1=弱 / 2=中 / 3=强）：持久化。 */
@@ -1007,6 +1020,7 @@ class MusicBoxApp : Application() {
             put("usb_high_gain", usbHighGain.value)
             put("debug_mode", debugMode.value)
             put("show_descriptions", showDescriptions.value)
+            put("reflection_tilt", reflectionTilt.value)
             put("haptic_strength", hapticStrength.value)
             put("glass_blur", glassBlur.value)
             put("glass_blur_level", glassBlurLevel.value)
@@ -1066,6 +1080,7 @@ class MusicBoxApp : Application() {
         if (o.has("usb_high_gain")) setUsbHighGain(o.optBoolean("usb_high_gain"))
         if (o.has("debug_mode")) setDebugMode(o.optBoolean("debug_mode"))
         if (o.has("show_descriptions")) setShowDescriptions(o.optBoolean("show_descriptions"))
+        if (o.has("reflection_tilt")) setReflectionTilt(o.optBoolean("reflection_tilt"))
         if (o.has("haptic_strength")) setHapticStrength(o.optInt("haptic_strength"))
         if (o.has("glass_blur_level")) setGlassBlurLevel(o.optInt("glass_blur_level"))
         else if (o.has("glass_blur")) setGlassBlur(o.optBoolean("glass_blur"))
@@ -1155,6 +1170,8 @@ private val USB_HIGH_GAIN = booleanPreferencesKey("usb_high_gain")
 private val P_VOLUME = floatPreferencesKey("wheel_volume")
 private val D_DEBUG = booleanPreferencesKey("debug_mode")
 private val T_SHOW_DESC = booleanPreferencesKey("show_descriptions")
+/** 封面倒影随手机倾斜视差开关（默认开）。 */
+private val T_REFLECTION_TILT = booleanPreferencesKey("reflection_tilt")
 private val T_HAPTIC = intPreferencesKey("haptic_strength")
 /** 液态玻璃开关（默认开）。 */
 private val T_GLASS_BLUR = booleanPreferencesKey("glass_blur")

@@ -93,11 +93,14 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalConfiguration
@@ -233,6 +236,36 @@ fun PlayerScreen(navController: NavController) {
         return
     }
 
+    // 倒影随动：倾斜检测提升到页面顶层，背景环境光与封面倒影共用同一份采样（只占一个传感器、省电），
+    // 并让「背景微移 / 封面微移 / 倒影大移」形成速度差，骗出空间感。
+    // 三个 MutableFloatState 由传感器回调直写，消费端只在 graphicsLayer lambda 内读取，不触发整页重组。
+    val reflectionTiltOn by MusicBoxApp.instance.reflectionTilt.collectAsState()
+    val tiltX = remember { mutableFloatStateOf(0f) }
+    val tiltY = remember { mutableFloatStateOf(0f) }
+    val tiltSpeed = remember { mutableFloatStateOf(0f) }
+    val tiltContext = LocalContext.current
+    val tiltDetector = remember { com.aipod.util.TiltDetector(tiltContext) }
+    DisposableEffect(tiltDetector, reflectionTiltOn) {
+        tiltDetector.onTilt = { x, y, s ->
+            tiltX.floatValue = x
+            tiltY.floatValue = y
+            tiltSpeed.floatValue = s
+        }
+        if (reflectionTiltOn && tiltDetector.isAvailable()) tiltDetector.start()
+        onDispose {
+            tiltDetector.stop()
+            tiltDetector.onTilt = null
+        }
+    }
+    LaunchedEffect(reflectionTiltOn) {
+        // 关闭开关：立即回正、速度归零，倒影静止但照常显示；传感器已在上面 stop，不耗电。
+        if (!reflectionTiltOn) {
+            tiltX.floatValue = 0f
+            tiltY.floatValue = 0f
+            tiltSpeed.floatValue = 0f
+        }
+    }
+
     // 液态玻璃采样源：背景层录制进该 backdrop，滚轮玻璃从同一实例采样（兄弟配对）。
     val glassBackdrop = rememberGlassBackdrop()
     androidx.compose.runtime.CompositionLocalProvider(
@@ -240,7 +273,7 @@ fun PlayerScreen(navController: NavController) {
     ) {
     Box(Modifier.fillMaxSize()) {
         // 竖屏背景与横屏一致：模糊当前封面 + 主色调 + 暗化渐变
-        CoverBackdrop(current)
+        CoverBackdrop(current, tiltX, tiltY)
         // 播放页保留状态栏（见 MainActivity.keepStatusBarVisible）：内容从状态栏下方开始，
         // 但背景仍在 Box 里铺满整屏，状态栏透出的是封面模糊图而不是黑条。
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -434,7 +467,7 @@ fun PlayerScreen(navController: NavController) {
                                     fadeByDistance = true,
                                     scrollState = lyricsScroll
                                 )
-                                else -> NowPlayingArt(track = c)
+                                else -> NowPlayingArt(track = c, tiltX, tiltY, tiltSpeed)
                             }
                         }
                     }
@@ -680,52 +713,138 @@ private fun WheelProgressHud(durationMs: Long) {
 }
 
 /**
- * 中间主区域：大封面 + 歌名 / 歌手。
+ * 中间主区域：大封面 + 紧贴倒影 + 单行信息（Hi-Res / 歌名 / 歌手）。
  * 歌词页一律通过长按中心键切换，封面不再可点，避免与「短按中心键切进度」的滚轮交互冲突。
- * 封面尺寸取「可用宽」与「可用高 - 文字区」的较小值，小屏上不会把歌名挤出去。
+ * 封面尺寸预留倒影与单行信息的高度，小屏上也不会挤出屏幕。
+ *
+ * 倾斜值由页面顶层的单个传感器提供（[tiltX] 左右 / [tiltY] 前后 / [tiltSpeed] 角速度），
+ * 全部在 graphicsLayer / RenderEffect 的 lambda 内读快照值，只更新绘制图层、不重组本页。
  */
 @Composable
 private fun NowPlayingArt(
-    track: Track
+    track: Track,
+    tiltX: androidx.compose.runtime.MutableFloatState,
+    tiltY: androidx.compose.runtime.MutableFloatState,
+    tiltSpeed: androidx.compose.runtime.MutableFloatState
 ) {
+    val density = LocalDensity.current
+    // 动态模糊档位预建一次、按速度复用引用：绝不每帧 new BlurEffect（那是卡顿主因）。
+    val blurStages = remember(density) {
+        val d = density.density
+        listOf(2.2f, 3.0f, 3.8f, 4.6f, 5.4f).map { r ->
+            androidx.compose.ui.graphics.BlurEffect(r * d, r * d)
+        }
+    }
     BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .padding(horizontal = 24.dp)
     ) {
-        val art = minOf(maxWidth, (maxHeight - 108.dp).coerceAtLeast(72.dp))
+        // 倒影缩短到封面的 18%，单行信息约 40dp；据可用高反推封面尺寸，给倒影下方留呼吸空间。
+        val art = minOf(maxWidth, ((maxHeight - 52.dp) / 1.22f).coerceAtLeast(72.dp))
+        val reflectionH = art * 0.18f
         Column(
             Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // 切歌封面采用与专辑列表同一套连续 3D 动画，但只显示当前一张、不漏出邻封。
-            CoverFlowSwitcher(art = art)
-            Spacer(Modifier.height(18.dp))
-            if (track.isHiRes || track.qualityLabel.isNotBlank()) {
-                HiResBadge(track, onDark = true)
-                Spacer(Modifier.height(6.dp))
+            // 封面本体随倾斜只在水平方向做「反向、更小」的移动：与倒影的「同向、更大」移动形成相对错位（视差）；垂直方向不动。
+            Box(
+                Modifier.graphicsLayer {
+                    translationX = tiltX.floatValue * art.toPx() * 0.035f
+                }
+            ) {
+                // 切歌封面采用与专辑列表同一套连续 3D 动画，但只显示当前一张、不漏出邻封。
+                CoverFlowSwitcher(art = art)
             }
-            Text(
-                track.title,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                track.artist.ifBlank { "未知歌手" },
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.White.copy(alpha = 0.65f),
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth()
-            )
+
+            // 倒影直接紧贴封面底边，中间不加任何高光/分隔线。
+            // 玻璃台面式倒影：封面垂直翻转 + 压缩 + 随速度变化的动态模糊；
+            // 遮罩顶部透明度提到 0.42 并指数衰减（上半保留车顶/文字轮廓），下半快速融进背景。
+            // 纯平面视差：倾斜只驱动水平位移，倒影始终是一张平面镜像、不做 3D 透视、垂直方向不动。
+            val hasCover = !track.coverUrl.isNullOrBlank() || !track.embeddedAudioUrl.isNullOrBlank()
+            if (hasCover) {
+                Box(
+                    Modifier
+                        .width(art)
+                        .height(reflectionH)
+                        // 只做水平位移、无旋转：圆角保持平面裁切即可。
+                        .graphicsLayer {
+                            compositingStrategy = CompositingStrategy.Offscreen
+                            translationX = tiltX.floatValue * art.toPx() * 0.13f
+                        }
+                        .clip(RoundedCornerShape(14.dp))
+                        .drawWithContent {
+                            drawContent()
+                            // 指数式衰减：0.42 起步、前段缓慢（保留 Antique/车顶轮廓），后段快速归零。
+                            drawRect(
+                                brush = Brush.verticalGradient(
+                                    colorStops = arrayOf(
+                                        0f to Color.Black.copy(alpha = 0.42f),
+                                        0.22f to Color.Black.copy(alpha = 0.30f),
+                                        0.50f to Color.Black.copy(alpha = 0.12f),
+                                        0.72f to Color.Black.copy(alpha = 0.03f),
+                                        0.88f to Color.Transparent,
+                                        1f to Color.Transparent
+                                    )
+                                ),
+                                blendMode = BlendMode.DstIn
+                            )
+                        }
+                ) {
+                    CoverImage(
+                        track.coverUrl,
+                        Modifier
+                            .fillMaxSize()
+                            // 动态模糊：从预建的 5 档里按角速度选一档复用引用，只跨档时切换、不逐帧分配 native 对象。
+                            .graphicsLayer {
+                                val i = (tiltSpeed.floatValue * (blurStages.size - 1)).toInt()
+                                    .coerceIn(0, blurStages.lastIndex)
+                                renderEffect = blurStages[i]
+                                // 垂直翻转 = 镜像；scaleY 绝对值 0.80 → 竖直压短 20%，台面透视更强。
+                                scaleY = -0.80f
+                            },
+                        embeddedAudioUrl = track.embeddedAudioUrl,
+                        contentScale = ContentScale.Crop,
+                        // 内层不裁角（交外层统一裁），避免双层圆角叠加出现直角残边。
+                        shape = androidx.compose.ui.graphics.RectangleShape
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(if (hasCover) 10.dp else 18.dp))
+            // Hi-Res 徽章 + 歌名 + 歌手名合并到同一行。
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // 只保留 Hi-Res 徽章，不再显示 24bit / 48kHz 等采样率规格文字。
+                if (track.isHiRes) {
+                    HiResBadge(track, showSpec = false, onDark = true)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    track.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    track.artist.ifBlank { "未知歌手" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.65f),
+                    textAlign = TextAlign.Start,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+            }
         }
     }
 }
@@ -1013,11 +1132,23 @@ private fun LandscapeControls(
  * 这一层同时作为滚轮玻璃的 backdrop 采样源（采样录制在组件内部完成）。
  */
 @Composable
-private fun CoverBackdrop(track: Track?) {
+private fun CoverBackdrop(
+    track: Track?,
+    tiltX: androidx.compose.runtime.MutableFloatState = androidx.compose.runtime.mutableFloatStateOf(0f),
+    tiltY: androidx.compose.runtime.MutableFloatState = androidx.compose.runtime.mutableFloatStateOf(0f)
+) {
     val bitmap = rememberCoverBitmap(track?.coverUrl, track?.embeddedAudioUrl)
     AmbientMeshBackground(
         bitmap = bitmap,
-        modifier = Modifier.fillMaxSize(),
+        // 背景环境光随倾斜只在水平方向做「反向、更慢」的微小移动：与前景倒影形成速度差，骗出空间感；垂直方向不动。
+        // graphicsLayer 在 lambda 内读快照值，只更新绘制图层、不重组；放大 6% 防止平移露边。
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                scaleX = 1.06f
+                scaleY = 1.06f
+                translationX = -tiltX.floatValue * 26f
+            },
         fallback = BrandRed,
         // 用封面 URL 做缓存 key：从别的页面切回来时直接命中上次的取色，不再闪兜底红
         cacheKey = track?.coverUrl ?: track?.embeddedAudioUrl

@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
@@ -115,6 +116,7 @@ fun WheelSettingsScreen(navController: NavController) {
     val visibleTabs by app.visibleTabs.collectAsState()
     val debugMode by app.debugMode.collectAsState()
     val showDescriptions by app.showDescriptions.collectAsState()
+    val reflectionTilt by app.reflectionTilt.collectAsState()
     val hapticStrength by app.hapticStrength.collectAsState()
     val glassBlurLevel by app.glassBlurLevel.collectAsState()
     val webDav by app.webDavConn.collectAsState()
@@ -228,7 +230,7 @@ fun WheelSettingsScreen(navController: NavController) {
     // 构建当前页条目
     val items: List<SettingItem> = when (node) {
         SettingsNode.Root ->         buildRootSettings(
-            sourceMode, audioQuality, usbExclusive, usbHighGain, scanPace, hapticStrength, glassBlurLevel, debugMode, showDescriptions,
+            sourceMode, audioQuality, usbExclusive, usbHighGain, scanPace, hapticStrength, glassBlurLevel, debugMode, showDescriptions, reflectionTilt,
             webDav, fnos, webDavScanning, coverCacheSize, transcodeSize, localCount, localScanning, localScanProgress,
             !localFolderUri.isNullOrBlank()
         )
@@ -286,6 +288,11 @@ fun WheelSettingsScreen(navController: NavController) {
                 }
             }
             is SettingItem.Toggle -> when (item.key) {
+                "reflectiontilt" -> scope.launch {
+                    val next = !reflectionTilt
+                    app.setReflectionTilt(next)
+                    statusLine = if (next) "倒影随动已开：随手机倾斜变化" else "倒影随动已关：固定不动"
+                }
                 "usbexclusive" -> scope.launch {
                     val next = !usbExclusive
                     app.setUsbExclusive(next)
@@ -582,7 +589,7 @@ private fun SettingItem.subtitle(): String = when (this) {
 
 private fun buildRootSettings(
     source: SourceMode, quality: AudioQuality, usbExclusive: Boolean, usbHighGain: Boolean,
-    scanPace: Long, haptic: Int, backdropLevel: Int, debug: Boolean, showDescriptions: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
+    scanPace: Long, haptic: Int, backdropLevel: Int, debug: Boolean, showDescriptions: Boolean, reflectionTilt: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
     coverSize: Long, transcodeSize: Long, localCount: Int, localScanning: Boolean, localScanProgress: String,
     hasLocalFolder: Boolean
 ): List<SettingItem> {
@@ -623,6 +630,11 @@ private fun buildRootSettings(
     }
     out += SettingItem.Choice(
         "backdropblur", "背景流光", backdropName, Icons.Default.BlurOn
+    )
+    out += SettingItem.Toggle(
+        "reflectiontilt", "倒影随动",
+        if (reflectionTilt) "开 · 倒影随手机倾斜变化" else "关 · 倒影固定不动",
+        Icons.Default.Sensors
     )
     out += SettingItem.Nav("webdav", "WebDAV 连接", if (webDav != null) "已配置" else "未配置", Icons.Default.Link)
     out += SettingItem.Nav("fnos", "飞牛音乐登录", if (fnos != null) "已登录" else "未登录", Icons.Default.Storage)

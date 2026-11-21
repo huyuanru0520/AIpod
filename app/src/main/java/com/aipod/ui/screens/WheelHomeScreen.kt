@@ -1,5 +1,12 @@
 package com.aipod.ui.screens
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -40,18 +47,27 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -176,6 +192,15 @@ internal fun WheelHome(
     // 竖屏单一路径：Root 主菜单 → 转轮选择分类 → 进入对应层。
     // 横屏 CoverFlow 分支已移除（App 锁死竖屏）。
 
+    // 层级导航方向：1=进入子层（新页从右滑入），-1=返回上层（新页从左滑入）。
+    // 由 push / pop / home 更新，供 AnimatedContent 的 transitionSpec 读取。
+    var navDirection by remember(data) { mutableStateOf(1) }
+
+    // 每屏展示数据快照：AnimatedContent 切换时，退出中的旧页仍读到外层的 items/selected，
+    // 会被新层加载的数据「闪改」。按 node 缓存一份，让旧页始终读自己进入时的那份数据。
+    // items/selected 仍是加载逻辑的「当前工作副本」，这里只是额外镜像供转场内容读取。
+    val screenSnapshots = remember(data) { mutableStateMapOf<String, ScreenSnapshot>() }
+
     val cacheKey = WheelMemory.key(memoryKey, node, data)
     val isSearch = node is WheelNode.Search && searchQuery.isNotBlank()
 
@@ -232,16 +257,29 @@ internal fun WheelHome(
         if (!isSearch) WheelMemory.saveSelection(cacheKey, selected)
     }
 
+    // 把当前层的展示数据镜像进快照，供 AnimatedContent 中转场中的旧页读取。
+    // key 用 nodeKey（同一 AlbumDetail 实例稳定），值随 items/selected/状态同步刷新。
+    LaunchedEffect(cacheKey, node, items, selected, loading, loadError, searchQuery, searchPhase) {
+        screenSnapshots[cacheKey] = ScreenSnapshot(node, items, selected, loading, loadError, searchQuery, searchPhase)
+    }
+
     fun push(next: WheelNode) {
+        navDirection = 1
         stack = stack + next
     }
 
     fun pop() {
-        if (stack.size > 1) stack = stack.dropLast(1)
+        if (stack.size > 1) {
+            navDirection = -1
+            stack = stack.dropLast(1)
+        }
     }
 
     fun home() {
-        if (stack.size > 1) stack = listOf<WheelNode>(WheelNode.Root)
+        if (stack.size > 1) {
+            navDirection = -1
+            stack = listOf<WheelNode>(WheelNode.Root)
+        }
     }
 
     // 中心键 / 点击：歌曲直接播放；竖屏进播放页，横屏留在全屏 CoverFlow 只播放不跳页。
@@ -322,8 +360,22 @@ internal fun WheelHome(
         LocalGlassBackdrop provides glassBackdrop
     ) {
     // ============ 竖屏：动态背景（播放封面模糊 / 苹果红）+ 屏幕列表 + 滚轮 ============
+    // 背景取色源：只有停在「专辑」层时才跟随当前选中的专辑封面；
+    // 退出专辑层 / 回主菜单 / 进其它列表 / 正在播放时，统一跟随正在播放曲目，
+    // 都没有就由 WheelBackdrop 用苹果红兜底。这样从播放页返回、退出专辑时颜色连续不跳。
+    val focusItem = if (node is WheelNode.Albums) items.getOrNull(selected.coerceIn(0, items.lastIndex.coerceAtLeast(0))) else null
+    val backdropCover = when (focusItem) {
+        is WheelItem.Op -> focusItem.cover
+        is WheelItem.Track -> focusItem.cover
+        else -> currentTrack?.coverUrl
+    }
+    val backdropEmbedded = when (focusItem) {
+        is WheelItem.Op -> focusItem.embedded
+        is WheelItem.Track -> focusItem.embedded
+        else -> currentTrack?.embeddedAudioUrl
+    }
     Box(Modifier.fillMaxSize()) {
-        WheelBackdrop(current = currentTrack, red = appleRed)
+        WheelBackdrop(coverUrl = backdropCover, embedded = backdropEmbedded, red = appleRed)
         Column(Modifier.fillMaxSize()) {
             // 所有层级（含二级列表）都不显示标题与说明小字——滚轮上方就是纯列表屏幕，
             // 省下的高度让列表多显示一行。加载中/错误/空态由列表区的独立提示承担。
@@ -347,43 +399,73 @@ internal fun WheelHome(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                when {
-                    // 搜索输入态：屏幕就是一块字母盘，转动滚轮选字母，中心键确认，MENU 退格
-                    node is WheelNode.Search && searchPhase == 0 -> SearchWheelPad(
-                        query = searchQuery,
-                        chars = searchChars,
-                        charIndex = searchChar,
-                        dark = false
-                    )
-                    loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                        CircularProgressIndicator(color = Color.White)
-                    }
-                    loadError != null -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                        Text(loadError ?: "加载失败", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall)
-                    }
-                    items.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                        Text(
-                            if (scanning) "正在扫描音乐库，找到的歌曲会自动出现…" else node.hint,
-                            color = Color.White.copy(alpha = 0.8f),
-                            style = MaterialTheme.typography.bodyMedium
+                // 层级切换用 iPod 式整页推入转场：进入子层新页从右滑入、旧页左移淡出；
+                // 返回则反向。targetState 用各层稳定的 cacheKey，node 本身由 stack.last() 派生。
+                AnimatedContent(
+                    targetState = cacheKey,
+                    transitionSpec = {
+                        val navSpec = androidx.compose.animation.core.tween<androidx.compose.ui.unit.IntOffset>(280)
+                        val fadeSpec = androidx.compose.animation.core.tween<Float>(200)
+                        if (navDirection > 0) {
+                            (slideInHorizontally(navSpec) { it } + fadeIn(fadeSpec)) togetherWith
+                                (slideOutHorizontally(navSpec) { -it / 4 } + fadeOut(fadeSpec))
+                        } else {
+                            (slideInHorizontally(navSpec) { -it } + fadeIn(fadeSpec)) togetherWith
+                                (slideOutHorizontally(navSpec) { it / 4 } + fadeOut(fadeSpec))
+                        }
+                    },
+                    label = "wheel-level-transition"
+                ) { targetKey ->
+                    // 转场中旧页读自己那一屏的快照，不被新层加载的 items 闪改；
+                    // 首次进入还没镜像时回退到当前外层状态。
+                    val snap = screenSnapshots[targetKey]
+                    val shownItems = snap?.items ?: items
+                    val shownSelected = snap?.selected ?: selected
+                    val shownLoading = snap?.loading ?: loading
+                    val shownError = snap?.loadError ?: loadError
+                    val shownQuery = snap?.searchQuery ?: searchQuery
+                    val shownPhase = snap?.searchPhase ?: searchPhase
+                    // 用快照里冻结的 node 决定这一屏渲染哪种界面（不随外层 node 变）。
+                    val screenNode = snap?.node ?: node
+
+                    when {
+                        // 搜索输入态：屏幕就是一块字母盘，转动滚轮选字母，中心键确认，MENU 退格
+                        screenNode is WheelNode.Search && shownPhase == 0 -> SearchWheelPad(
+                            query = shownQuery,
+                            chars = searchChars,
+                            charIndex = searchChar,
+                            dark = false
                         )
-                    }
-                    // 专辑层：3D CoverFlow 唱片架（转轮/左右键切换封面，中心键或点封面进专辑）。
-                    // 这是用户真正看到的「专辑列表」——所有音源都走 WheelHome，这里才是生效点。
-                    node is WheelNode.Albums -> ClickCoverFlow(
-                        items = items,
-                        selected = selected.coerceIn(0, items.lastIndex),
-                        onSelected = { selected = it },
-                        onClick = { confirm(it) },
-                        followSelection = true,
-                        hint = "转动滚轮切换封面 · 按中心键进专辑"
-                    )
-                    else -> {
-                        WheelList(
-                            items = items,
-                            selected = selected,
-                            immersive = false
+                        shownLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                            CircularProgressIndicator(color = Color.White)
+                        }
+                        shownError != null -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                            Text(shownError, color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall)
+                        }
+                        shownItems.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                            Text(
+                                if (scanning) "正在扫描音乐库，找到的歌曲会自动出现…" else screenNode.hint,
+                                color = Color.White.copy(alpha = 0.8f),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        // 专辑层：3D CoverFlow 唱片架（转轮/左右键切换封面，中心键或点封面进专辑）。
+                        // 这是用户真正看到的「专辑列表」——所有音源都走 WheelHome，这里才是生效点。
+                        screenNode is WheelNode.Albums -> ClickCoverFlow(
+                            items = shownItems,
+                            selected = shownSelected.coerceIn(0, shownItems.lastIndex),
+                            onSelected = { selected = it },
+                            onClick = { confirm(it) },
+                            followSelection = true,
+                            hint = "转动滚轮切换封面 · 按中心键进专辑"
                         )
+                        else -> {
+                            WheelList(
+                                items = shownItems,
+                                selected = shownSelected,
+                                immersive = false
+                            )
+                        }
                     }
                 }
 
@@ -468,14 +550,14 @@ internal fun WheelHome(
  * 因此切歌之外不会因每秒进度更新而重组。
  */
 @Composable
-private fun WheelBackdrop(current: com.aipod.data.Track?, red: Color) {
-    val bmp = rememberCoverBitmap(current?.coverUrl, current?.embeddedAudioUrl)
+private fun WheelBackdrop(coverUrl: String?, embedded: String?, red: Color) {
+    val bmp = rememberCoverBitmap(coverUrl, embedded)
     AmbientMeshBackground(
         bitmap = bmp,
         modifier = Modifier.fillMaxSize(),
         fallback = red,
         // 用封面 URL 做缓存 key：从播放页切回来时直接命中上次的取色，不再闪兜底红
-        cacheKey = current?.coverUrl ?: current?.embeddedAudioUrl
+        cacheKey = coverUrl ?: embedded
     )
 }
 
@@ -503,6 +585,20 @@ internal sealed class WheelItem {
     data class Track(val title: String, val subtitle: String, val cover: String?, val embedded: String?, val index: Int, val all: List<com.aipod.data.Track>) : WheelItem()
     data class Action(val key: String, val title: String, val subtitle: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) : WheelItem()
 }
+
+/**
+ * 单个层级的展示数据快照。层级切换用 AnimatedContent 做推入转场时，退出中的旧页组合仍存活，
+ * 若直接读外层共享的 items/selected 会被新层加载结果「闪改」；按 node 冻结一份，转场期间各读各的。
+ */
+private data class ScreenSnapshot(
+    val node: WheelNode,
+    val items: List<WheelItem>,
+    val selected: Int,
+    val loading: Boolean,
+    val loadError: String?,
+    val searchQuery: String,
+    val searchPhase: Int
+)
 
 /**
  * 拉取全部分页的歌曲。飞牛 /track/list 每页最多 100 首，只取第 1 页会漏掉其余曲目；
@@ -788,6 +884,43 @@ private fun ClickCoverFlow(
     hint: String = "左右滑动切换封面 · 点击进专辑"
 ) {
     val rowState = rememberLazyListState()
+    // 设备双轴倾斜（-1..1）+ 角速度：供倒影做明显视差与动态模糊。
+    // 受「倒影随动」开关控制：关闭时注销传感器、回正为 0，倒影静止但仍显示、不耗电。
+    // 用 MutableFloatState 对象（非 by 委托），倾斜只在 graphicsLayer lambda 内读快照，
+    // 不触发 ClickCoverFlow 重组——避免打断 LazyRow 的逐帧 3D 滑动动画。
+    val reflectionTiltOn by com.aipod.MusicBoxApp.instance.reflectionTilt.collectAsState()
+    val tiltX = remember { mutableFloatStateOf(0f) }
+    val tiltY = remember { mutableFloatStateOf(0f) }
+    val tiltSpeed = remember { mutableFloatStateOf(0f) }
+    // 动态模糊档位预建一次、按速度复用引用，避免每帧 new BlurEffect 卡顿。
+    val blurDp = LocalDensity.current
+    val blurStages = remember(blurDp) {
+        val d = blurDp.density
+        listOf(2.2f, 3.0f, 3.8f, 4.6f, 5.4f).map { r ->
+            androidx.compose.ui.graphics.BlurEffect(r * d, r * d)
+        }
+    }
+    val context = LocalContext.current
+    val detector = remember { com.aipod.util.TiltDetector(context) }
+    DisposableEffect(detector, reflectionTiltOn) {
+        detector.onTilt = { x, y, s ->
+            tiltX.floatValue = x
+            tiltY.floatValue = y
+            tiltSpeed.floatValue = s
+        }
+        if (reflectionTiltOn && detector.isAvailable()) detector.start()
+        onDispose {
+            detector.stop()
+            detector.onTilt = null
+        }
+    }
+    LaunchedEffect(reflectionTiltOn) {
+        if (!reflectionTiltOn) {
+            tiltX.floatValue = 0f
+            tiltY.floatValue = 0f
+            tiltSpeed.floatValue = 0f
+        }
+    }
     // 首次定位：瞬时跳到传入的选中项（无动画），避免进入页面时长距离滚动。
     var didInit by remember(items) { mutableStateOf(false) }
     // 程序滚动期间抑制回报，防止回环。
@@ -845,13 +978,14 @@ private fun ClickCoverFlow(
         // 竖屏专辑层（followSelection）：屏幕区较窄且矮，卡片按高度为主、宽度兜底；
         // 触摸全屏流：沿用原横屏比例（宽屏按宽度 0.2）。
         val card = if (followSelection) {
-            // 竖屏专辑封面略放大：由 高0.60/宽0.56 提到 高0.68/宽0.64。
-            // itemW = card*1.18、两侧 contentPadding=(宽-itemW)/2 仍为正，邻封正常露出。
-            minOf(maxHeight * 0.68f, maxWidth * 0.64f)
+            // iPod 唱片架：中间封面收小到约半屏，给左右两侧留足空间铺开邻封。
+            minOf(maxHeight * 0.56f, maxWidth * 0.50f)
         } else {
             minOf(maxHeight * 0.55f, maxWidth * 0.20f)
         }
-        val itemW = card * 1.18f
+        // itemW 小于卡片宽 → 邻封紧凑向中心聚拢，一屏能露出左右各 2~3 张斜封；
+        // 两端 contentPadding=(宽-itemW)/2 仍为正，首尾也对称留白。
+        val itemW = if (followSelection) card * 0.86f else card * 1.18f
         LazyRow(
             state = rowState,
             modifier = Modifier.fillMaxSize(),
@@ -879,14 +1013,16 @@ private fun ClickCoverFlow(
                             val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
                             val vi = info.visibleItemsInfo.firstOrNull { it.index == i }
                             val norm = if (vi != null) {
-                                val d = (vi.offset + vi.size / 2f - center) / (itemW.toPx() * 1.6f)
-                                d.coerceIn(-1f, 1f)
+                                val d = (vi.offset + vi.size / 2f - center) / (itemW.toPx() * 1.15f)
+                                d.coerceIn(-3f, 3f)
                             } else 0f
-                            rotationY = -norm * 42f
-                            val s = 1f - abs(norm) * 0.28f
+                            val a = abs(norm)
+                            // 中间正面，左右各斜放数张：明显倾角 + 后退缩小 + 渐隐，iPod 唱片架观感。
+                            rotationY = -norm * 64f
+                            val s = 1f - a * 0.26f
                             scaleX = s
                             scaleY = s
-                            alpha = (1f - abs(norm) * 0.5f).coerceIn(0.15f, 1f)
+                            alpha = (1f - a * 0.28f).coerceIn(0.10f, 1f)
                             cameraDistance = 14f * density
                         }
                         .clickable(
@@ -907,36 +1043,93 @@ private fun ClickCoverFlow(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Box(
-                        Modifier
-                            .size(card)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color.White.copy(alpha = 0.10f))
-                    ) {
-                        val cover = when (item) {
-                            is WheelItem.Op -> item.cover
-                            is WheelItem.Track -> item.cover
-                            is WheelItem.Action -> null
+                    val cover = when (item) {
+                        is WheelItem.Op -> item.cover
+                        is WheelItem.Track -> item.cover
+                        is WheelItem.Action -> null
+                    }
+                    val embedded = when (item) {
+                        is WheelItem.Op -> item.embedded
+                        is WheelItem.Track -> item.embedded
+                        is WheelItem.Action -> null
+                    }
+                    val hasCover = !cover.isNullOrBlank() || !embedded.isNullOrBlank()
+                    // 封面 + 倒影作为一个整体随卡片 3D 倾斜，倒影始终紧贴各自封面底边。
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            Modifier
+                                .size(card)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color.White.copy(alpha = 0.10f))
+                        ) {
+                            if (hasCover) {
+                                CoverImage(cover, Modifier.fillMaxSize(), embeddedAudioUrl = embedded, contentScale = ContentScale.Crop)
+                            } else {
+                                Box(Modifier.fillMaxSize(), Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.Album,
+                                        contentDescription = null,
+                                        tint = Color.White.copy(alpha = 0.5f),
+                                        modifier = Modifier.size(card * 0.4f)
+                                    )
+                                }
+                            }
                         }
-                        val embedded = when (item) {
-                            is WheelItem.Op -> item.embedded
-                            is WheelItem.Track -> item.embedded
-                            is WheelItem.Action -> null
-                        }
-                        if (cover != null || embedded != null) {
-                            CoverImage(cover, Modifier.fillMaxSize(), embeddedAudioUrl = embedded, contentScale = ContentScale.Crop)
-                        } else {
-                            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                                Icon(
-                                    Icons.Default.Album,
-                                    contentDescription = null,
-                                    tint = Color.White.copy(alpha = 0.5f),
-                                    modifier = Modifier.size(card * 0.4f)
+                        // 倒影直接紧贴封面底边，中间不加任何高光/分隔线。
+                        // 玻璃台面式倒影：垂直翻转 + 压缩 + 随速度变化的动态模糊；
+                        // 遮罩顶部提到 0.42 并指数衰减（上半保留轮廓）、下半快速融进背景。
+                        // 纯平面视差：倾斜只驱动水平位移，倒影始终是一张平面镜像、不做 3D 透视、垂直方向不动。
+                        if (hasCover) {
+                            val reflectionH = card * 0.20f
+                            Box(
+                                Modifier
+                                    .width(card)
+                                    .height(reflectionH)
+                                    // 只做水平位移、无旋转：圆角保持平面裁切即可。
+                                    .graphicsLayer {
+                                        compositingStrategy = CompositingStrategy.Offscreen
+                                        translationX = tiltX.floatValue * card.toPx() * 0.13f
+                                    }
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .drawWithContent {
+                                        drawContent()
+                                        // 指数式衰减：0.42 起步、前段缓慢保留轮廓，后段快速归零融入背景。
+                                        drawRect(
+                                            brush = Brush.verticalGradient(
+                                                colorStops = arrayOf(
+                                                    0f to Color.Black.copy(alpha = 0.42f),
+                                                    0.22f to Color.Black.copy(alpha = 0.30f),
+                                                    0.50f to Color.Black.copy(alpha = 0.12f),
+                                                    0.72f to Color.Black.copy(alpha = 0.03f),
+                                                    0.88f to Color.Transparent,
+                                                    1f to Color.Transparent
+                                                )
+                                            ),
+                                            blendMode = BlendMode.DstIn
+                                        )
+                                    }
+                            ) {
+                                CoverImage(
+                                    cover,
+                                    Modifier
+                                        .fillMaxSize()
+                                        // 动态模糊：从预建 5 档按角速度复用引用，只跨档切换、不逐帧分配 native 对象。
+                                        .graphicsLayer {
+                                            val i = (tiltSpeed.floatValue * (blurStages.size - 1)).toInt()
+                                                .coerceIn(0, blurStages.lastIndex)
+                                            renderEffect = blurStages[i]
+                                            // 翻转 + 竖直压短约 20%，台面透视更强。
+                                            scaleY = -0.80f
+                                        },
+                                    embeddedAudioUrl = embedded,
+                                    contentScale = ContentScale.Crop,
+                                    // 内层不裁角（交外层统一裁），避免双层圆角叠加出现直角残边。
+                                    shape = androidx.compose.ui.graphics.RectangleShape
                                 )
                             }
                         }
                     }
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(if (hasCover) 8.dp else 14.dp))
                     Text(
                         item.title(),
                         color = Color.White.copy(alpha = if (sel) 1f else 0.6f),
