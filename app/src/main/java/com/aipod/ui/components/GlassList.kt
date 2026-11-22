@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
 
 /**
  * 列表「液态玻璃选中」高亮（Apple Liquid Glass 观感）。
@@ -60,6 +61,8 @@ fun Modifier.glassHighlight(
             backdrop = backdrop,
             shape = { shape },
             effects = {
+                // 参考 GlassSurface：vibrancy 提亮提饱和，让背景色更鲜活地透过玻璃（不模糊、不加色）。
+                vibrancy()
                 // lens 高度受限于列表项最小圆角半径（12~14dp，取 6dp）。
                 lens(6f.dp.toPx(), 12f.dp.toPx(), chromaticAberration = true)
             },

@@ -6,7 +6,10 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
 import com.kyant.backdrop.drawPlainBackdrop
+import com.kyant.backdrop.drawBackdrop
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.produceState
 import com.aipod.ui.components.rememberAmbientPalette
@@ -19,7 +22,6 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -1223,14 +1225,10 @@ private fun SeekBar(
     val pressed by interactionSource.collectIsPressedAsState()
     val active = pressed || drag != null || wheelPosition != null
     var stretch by remember { mutableFloatStateOf(1f) }
-    var tailDir by remember { mutableFloatStateOf(0f) }
     var lastDragAt by remember { mutableLongStateOf(0L) }
     var lastDragValue by remember { mutableFloatStateOf(0f) }
     val stretchAnim by animateFloatAsState(
         stretch, spring(dampingRatio = 0.5f, stiffness = 420f), label = "seekStretch"
-    )
-    val tailAnim by animateFloatAsState(
-        tailDir, spring(dampingRatio = 0.6f, stiffness = 340f), label = "seekTail"
     )
 
     // 液体光斑的横向游走：4.8s 一个来回，只重绘这条小进度条
@@ -1262,7 +1260,6 @@ private fun SeekBar(
                 lastDragValue = v
                 // 拖得越快拉伸越明显（上限 +26%，比之前更克制，避免像橡皮筋），纵向等量挤压
                 stretch = 1f + (speed * 150f).coerceIn(0f, 0.26f).toFloat()
-                tailDir = (delta * 900f).coerceIn(-1f, 1f)
                 drag = v
             },
             onValueChangeFinished = {
@@ -1272,26 +1269,21 @@ private fun SeekBar(
                 }
                 drag = null
                 stretch = 1f
-                tailDir = 0f
             },
             valueRange = 0f..maxRange,
             interactionSource = interactionSource,
             // 36dp 隐形触控热区，视觉仍只有 7~10dp
             modifier = Modifier.fillMaxWidth().height(36.dp),
             thumb = {
-                Box(
-                    Modifier
-                        .size(thumbS)
-                        .graphicsLayer {
-                            scaleX = stretchAnim
-                            scaleY = 1f / stretchAnim.coerceAtLeast(1f)
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Canvas(Modifier.fillMaxSize()) {
-                        drawLiquidDroplet(center, size.minDimension / 2f, glass, tailAnim)
+                GlassThumb(
+                    size = thumbS,
+                    backdrop = LocalGlassBackdrop.current,
+                    tint = accent,
+                    modifier = Modifier.graphicsLayer {
+                        scaleX = stretchAnim
+                        scaleY = 1f / stretchAnim.coerceAtLeast(1f)
                     }
-                }
+                )
             },
             track = { state ->
                 val range = state.valueRange
@@ -1419,160 +1411,40 @@ private fun DrawScope.drawLiquidTrack(
 }
 
 /**
- * 水珠 Thumb：中心完全透出下方 Fill，只在边缘做菲涅尔折射。
- *
- * 之前那颗"塑料珠"的假感来自两处：①整圈均匀的 accent 描边；②中心一团白雾。
- * 现在改为——中心透明、边缘由内到外微微提亮（光在珠体边缘折射增厚），
- * 再叠一段左上锐利亮弧 + 一段右下极淡暗弧（光从左上打来的方向感），
- * 配一颗左上小高光点与右下环境反光点。没有均匀外环、没有白心。
- *
- * @param tail 拖拽方向带符号的形变（-1..1），0 为静止（音量条端点传 0）
+ * 玻璃圆点：真实折射采样背景（vibrancy 提亮 + 轻 blur + lens 边缘色散），
+ * 无采样源时降级为蓝色实心圆。进度条与音量条共用，端点样式一致。
+ * 尺寸由调用方给定（进度条 16/20dp、音量条 15dp），形状恒为圆形。
  */
-private fun DrawScope.drawLiquidDroplet(
-    c: Offset,
-    r: Float,
-    glass: Color,
-    tail: Float
+@Composable
+private fun GlassThumb(
+    size: Dp,
+    backdrop: com.kyant.backdrop.Backdrop?,
+    modifier: Modifier = Modifier,
+    tint: Color = BrandRed
 ) {
-    val u = 1.dp.toPx()
-    // 0) 拖拽粘性拖尾（很淡，只在真正拖动时出现）
-    val t = kotlin.math.abs(tail)
-    if (t > 0.02f) {
-        drawRoundRect(
-            brush = Brush.horizontalGradient(
-                listOf(
-                    Color.Transparent,
-                    glass.copy(alpha = 0.11f * t),
-                    Color.Transparent
-                )
-            ),
-            topLeft = Offset(
-                if (tail > 0) c.x - r * 2.8f else c.x - r * 0.2f,
-                c.y - r * 0.38f
-            ),
-            size = Size(r * 3f, r * 0.76f),
-            cornerRadius = CornerRadius(r * 0.38f, r * 0.38f)
-        )
+    if (backdrop == null) {
+        // 降级：无 backdrop 时用普通蓝色实心圆
+        Box(modifier.size(size).clip(CircleShape).background(Color(0xCC0A84FF)))
+        return
     }
-
-    val circle = androidx.compose.ui.graphics.Path().apply {
-        addOval(androidx.compose.ui.geometry.Rect(c.x - r, c.y - r, c.x + r, c.y + r))
-    }
-
-    // 1) 玻璃体液：中心透明（透出下方 Fill），边缘菲涅尔渐亮；叠一层极淡水透色底给体积。
-    drawCircle(
-        brush = Brush.radialGradient(
-            colorStops = arrayOf(
-                0.00f to glass.copy(alpha = 0.05f),
-                0.52f to glass.copy(alpha = 0.03f),
-                0.80f to glass.copy(alpha = 0.10f),
-                0.93f to glass.copy(alpha = 0.20f),
-                1.00f to glass.copy(alpha = 0.32f)
-            ),
-            center = c, radius = r
-        ),
-        radius = r, center = c
-    )
-
-    // 2) 弯月面：clip 到珠体内，上缘一道亮内阴影、下缘一道暗，让液滴「鼓」起来。
-    clipPath(circle) {
-        val rim = r * 0.5f
-        drawCircle(
-            brush = Brush.linearGradient(
-                colorStops = arrayOf(
-                    0.00f to Color.White.copy(alpha = 0.42f),
-                    0.40f to Color.White.copy(alpha = 0.06f),
-                    0.70f to Color.Transparent
-                ),
-                start = Offset(c.x - r, c.y - r),
-                end = Offset(c.x + r * 0.4f, c.y + r * 0.4f)
-            ),
-            center = c, radius = r, style = Stroke(width = rim)
+    val sizePx = with(LocalDensity.current) { size.toPx() }
+    Box(
+        modifier.size(size).drawBackdrop(
+            backdrop = backdrop,
+            shape = { CircleShape },
+            effects = {
+                vibrancy()
+                blur(2f.dp.toPx())
+                // lens 依赖 RuntimeShader，API 33+ 才生效；半径/高度按圆点尺寸等比缩放
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    lens(sizePx * 0.36f, sizePx * 0.5f, chromaticAberration = true)
+                }
+            },
+            onDrawSurface = {
+                // 极淡强调色膜（Screen 不改色相），让玻璃珠与轨道 Fill 颜色连贯
+                drawCircle(tint.copy(alpha = 0.05f), blendMode = BlendMode.Screen)
+            }
         )
-        drawCircle(
-            brush = Brush.linearGradient(
-                colorStops = arrayOf(
-                    0.00f to Color.Transparent,
-                    0.55f to Color.Black.copy(alpha = 0.04f),
-                    1.00f to Color.Black.copy(alpha = 0.20f)
-                ),
-                start = Offset(c.x - r * 0.4f, c.y - r * 0.4f),
-                end = Offset(c.x + r, c.y + r)
-            ),
-            center = c, radius = r, style = Stroke(width = rim)
-        )
-    }
-
-    // 3) 色散彩边：左上一段极淡青→品红 fringe（spherochromatism），Plus 只提亮。
-    drawCircle(
-        brush = Brush.linearGradient(
-            colors = listOf(
-                Color(0xFF8FE8FF).copy(alpha = 0.34f),
-                Color(0xFFFF9AD8).copy(alpha = 0.16f),
-                Color.Transparent
-            ),
-            start = Offset(c.x - r, c.y - r),
-            end = Offset(c.x + r * 0.3f, c.y + r * 0.3f)
-        ),
-        radius = r - 0.9f * u, center = c,
-        style = Stroke(width = 1.7f * u), blendMode = BlendMode.Plus
-    )
-
-    // 4) 边缘张力线：1px 极细、不均匀的描边，左上全白 → 右下透明，底部留一道 bounce。
-    drawCircle(
-        brush = Brush.linearGradient(
-            colorStops = arrayOf(
-                0.00f to Color.White.copy(alpha = 0.92f),
-                0.32f to Color.White.copy(alpha = 0.34f),
-                0.68f to Color.White.copy(alpha = 0.06f),
-                1.00f to Color.White.copy(alpha = 0.50f)
-            ),
-            start = Offset(c.x - r, c.y - r),
-            end = Offset(c.x + r, c.y + r)
-        ),
-        radius = r - 0.6f * u, center = c,
-        style = Stroke(width = 1.1f * u)
-    )
-
-    // 5) 左上锐利高光点：柔光晕 + 双层高光核（大白点 + 更小的纯白核），近看才有层次。
-    val hl = Offset(c.x - r * 0.31f, c.y - r * 0.34f)
-    drawCircle(
-        brush = Brush.radialGradient(
-            listOf(Color.White.copy(alpha = 0.40f), Color.Transparent),
-            center = hl, radius = r * 0.34f
-        ),
-        radius = r * 0.34f, center = hl
-    )
-    drawCircle(color = Color.White.copy(alpha = 0.88f), radius = r * 0.13f, center = hl)
-    drawCircle(color = Color.White.copy(alpha = 0.98f), radius = r * 0.07f,
-        center = Offset(hl.x - r * 0.02f, hl.y - r * 0.02f))
-
-    // 6) 右下环境反光点：底部透进来的背景光斑 + 一颗极小的次级高光核。
-    val gl = Offset(c.x + r * 0.33f, c.y + r * 0.40f)
-    drawCircle(
-        brush = Brush.radialGradient(
-            listOf(glass.copy(alpha = 0.22f), Color.Transparent),
-            center = gl, radius = r * 0.30f
-        ),
-        radius = r * 0.30f, center = gl
-    )
-    drawCircle(color = glass.copy(alpha = 0.34f), radius = r * 0.055f, center = gl)
-
-    // 7) 底部焦散弧：一道极窄的反光弧，模拟液滴底部的光线汇聚。
-    drawArc(
-        brush = Brush.linearGradient(
-            listOf(
-                Color.Transparent,
-                Color.White.copy(alpha = 0.40f),
-                Color.Transparent
-            ),
-            start = Offset(c.x - r * 0.55f, c.y + r * 0.7f),
-            end = Offset(c.x + r * 0.55f, c.y + r * 0.7f)
-        ),
-        startAngle = 42f, sweepAngle = 96f, useCenter = false,
-        topLeft = Offset(c.x - r * 0.82f, c.y - r * 0.82f),
-        size = Size(r * 1.64f, r * 1.64f),
-        style = Stroke(width = 1.2f * u, cap = StrokeCap.Round)
     )
 }
 
@@ -1672,15 +1544,13 @@ private fun VolumeBar(volume: Float) {
                     height = 8.dp
                 )
             )
-            // 与进度条同款水珠端点（静止，不响应拖拽）
-            Box(
-                Modifier.offset(x = (trackW - thumbS) * v).size(thumbS),
-                contentAlignment = Alignment.Center
-            ) {
-                Canvas(Modifier.fillMaxSize()) {
-                    drawLiquidDroplet(center, size.minDimension / 2f, glass, 0f)
-                }
-            }
+            // 与进度条同款玻璃端点（静止，不响应拖拽）
+            GlassThumb(
+                size = thumbS,
+                backdrop = LocalGlassBackdrop.current,
+                tint = accent,
+                modifier = Modifier.offset(x = (trackW - thumbS) * v)
+            )
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("音量", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.6f))

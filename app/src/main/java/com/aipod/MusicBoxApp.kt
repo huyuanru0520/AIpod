@@ -217,6 +217,11 @@ class MusicBoxApp : Application() {
     /** 背景模糊度档位：0=清晰、1=轻(6dp)、2=中(16dp)、3=重(32dp)。默认中档 2。 */
     val glassBlurLevel = MutableStateFlow(2)
     /**
+     * 列表图标玻璃质感风格：0=透明玻璃、1=磨砂玻璃、2=彩色玻璃、3=棱镜色散、4=霓虹玻璃。
+     * 默认 0（透明玻璃，最通透）。设置页可循环切换，持久化且纳入备份/恢复。
+     */
+    val iconStyle = MutableStateFlow(0)
+    /**
      * 横屏 Cover Flow / 由其打开的专辑列表是否为「全屏沉浸」态。
      * 为 true 时 MainActivity 隐藏底部导航与 MiniPlayer，并切到沉浸式系统栏。
      */
@@ -606,6 +611,8 @@ class MusicBoxApp : Application() {
         // 液态玻璃开关 与 背景模糊度 完全独立：前者控制 backdrop 库玻璃层，后者只控制封面 .blur。
         glassBlur.value = p[T_GLASS_BLUR] ?: true
         glassBlurLevel.value = (p[T_GLASS_LEVEL] ?: 2).coerceIn(0, 3)
+        // 列表图标玻璃风格（0-4，默认透明玻璃 0）
+        iconStyle.value = (p[T_ICON_STYLE] ?: 0).coerceIn(0, 4)
         // 崩溃自降级保险：若上一次运行因液态玻璃库（com.kyant.backdrop）绘制崩溃而闪退，
         // 本次强制关闭玻璃并清除崩溃标志，避免反复闪退循环。只在库专属特征出现时触发，
         // 一次性降级——不写回偏好，用户可在设置页手动重新打开。
@@ -819,6 +826,14 @@ class MusicBoxApp : Application() {
         CrashLogger.info("Settings", "背景模糊度=$v")
     }
 
+    /** 列表图标玻璃质感风格（0-4）：持久化。 */
+    suspend fun setIconStyle(style: Int) {
+        val v = style.coerceIn(0, 4)
+        iconStyle.value = v
+        dataStore.edit { it[T_ICON_STYLE] = v }
+        CrashLogger.info("Settings", "图标风格=$v")
+    }
+
     // ---- 收藏三表（按音源分表）----
 
     /** 该曲目所属音源的收藏表。M3U 归到 WebDAV。 */
@@ -1024,6 +1039,7 @@ class MusicBoxApp : Application() {
             put("haptic_strength", hapticStrength.value)
             put("glass_blur", glassBlur.value)
             put("glass_blur_level", glassBlurLevel.value)
+            put("icon_style", iconStyle.value)
             put("favorites_webdav", encodeIds(favWebDav.value))
             put("favorites_fnos", encodeIds(favFnos.value))
             put("favorites_local", encodeIds(favLocal.value))
@@ -1084,6 +1100,7 @@ class MusicBoxApp : Application() {
         if (o.has("haptic_strength")) setHapticStrength(o.optInt("haptic_strength"))
         if (o.has("glass_blur_level")) setGlassBlurLevel(o.optInt("glass_blur_level"))
         else if (o.has("glass_blur")) setGlassBlur(o.optBoolean("glass_blur"))
+        if (o.has("icon_style")) setIconStyle(o.optInt("icon_style"))
         if (o.has("favorites_webdav")) { favWebDav.value = decodeIds(o.optString("favorites_webdav")); dataStore.edit { it[FAV_WEBDAV] = encodeIds(favWebDav.value) } }
         if (o.has("favorites_fnos")) { favFnos.value = decodeIds(o.optString("favorites_fnos")); dataStore.edit { it[FAV_FNOS] = encodeIds(favFnos.value) } }
         if (o.has("favorites_local")) { favLocal.value = decodeIds(o.optString("favorites_local")); dataStore.edit { it[FAV_LOCAL] = encodeIds(favLocal.value) } }
@@ -1176,6 +1193,8 @@ private val T_HAPTIC = intPreferencesKey("haptic_strength")
 /** 液态玻璃开关（默认开）。 */
 private val T_GLASS_BLUR = booleanPreferencesKey("glass_blur")
 private val T_GLASS_LEVEL = intPreferencesKey("glass_blur_level")
+/** 列表图标玻璃质感风格（0-4）。 */
+private val T_ICON_STYLE = intPreferencesKey("icon_style")
 /** 收藏三表：按音源分表，存 Track.id 的 JSON 数组字符串。 */
 private val FAV_WEBDAV = stringPreferencesKey("favorites_webdav")
 private val FAV_FNOS = stringPreferencesKey("favorites_fnos")

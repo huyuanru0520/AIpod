@@ -33,14 +33,19 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
@@ -84,6 +89,7 @@ import com.aipod.ui.components.CoverImage
 import com.aipod.ui.components.fadeEdges
 import com.aipod.ui.components.fadeInList
 import com.aipod.ui.components.glassHighlight
+import com.aipod.ui.components.GlassIcon
 import com.aipod.ui.components.rememberGlassBackdrop
 import com.aipod.ui.components.LocalGlassBackdrop
 import com.aipod.ui.components.AmbientMeshBackground
@@ -172,6 +178,8 @@ internal fun WheelHome(
     val queue by PlayerController.queue.collectAsState()
     val currentIndex by PlayerController.currentIndex.collectAsState()
     val currentTrack = queue.getOrNull(currentIndex)
+    // 列表图标玻璃风格（设置页循环切换，0=透明玻璃）
+    val iconStyle by MusicBoxApp.instance.iconStyle.collectAsState()
 
     // 浏览栈：每一层是一个 WheelNode，中心键 push，MENU pop。
     var stack by remember(data) { mutableStateOf<List<WheelNode>>(listOf(WheelNode.Root)) }
@@ -463,7 +471,8 @@ internal fun WheelHome(
                             WheelList(
                                 items = shownItems,
                                 selected = shownSelected,
-                                immersive = false
+                                immersive = false,
+                                iconStyle = iconStyle
                             )
                         }
                     }
@@ -756,7 +765,8 @@ private fun WheelItem.subtitle(): String = when (this) {
 private fun WheelList(
     items: List<WheelItem>,
     selected: Int,
-    immersive: Boolean
+    immersive: Boolean,
+    iconStyle: Int = 0
 ) {
     val listState = rememberLazyListState()
     // 选中项变化时滚动，按跨度分两种走法：
@@ -814,14 +824,14 @@ private fun WheelList(
                     when (item) {
                         is WheelItem.Action -> {
                             Box(Modifier.size(48.dp), Alignment.Center) {
-                                Icon(item.icon, contentDescription = null, tint = fg)
+                                GlassIcon(item.icon, iconStyle, Modifier.size(34.dp), tint = fg)
                             }
                         }
                         is WheelItem.Op -> {
                             if (item.cover != null || item.embedded != null) {
                                 CoverImage(item.cover, Modifier.size(48.dp), embeddedAudioUrl = item.embedded)
                             } else {
-                                CategoryIcon(item.node, sel, fg)
+                                CategoryIcon(item.node, sel, fg, iconStyle)
                             }
                         }
                         is WheelItem.Track -> {
@@ -847,19 +857,26 @@ private fun WheelList(
 }
 
 @Composable
-private fun CategoryIcon(node: WheelNode, selected: Boolean, fg: Color) {
+private fun CategoryIcon(node: WheelNode, selected: Boolean, fg: Color, iconStyle: Int = 0) {
+    // 每个栏目分配互不相同的形状，避免列表里出现「好几个一样的图标」。
     val icon = when (node) {
-        WheelNode.Songs -> Icons.Default.MusicNote
-        WheelNode.Albums -> Icons.Default.Album
-        WheelNode.Artists -> Icons.Default.Person
-        WheelNode.Playlists -> Icons.Default.PlaylistPlay
-        WheelNode.Folders, is WheelNode.Folder -> Icons.Default.Folder
-        WheelNode.Genres -> Icons.Default.Album
-        WheelNode.Search -> Icons.Default.Search
-        else -> Icons.Default.MusicNote
+        WheelNode.Favorites -> Icons.Default.Star          // 我的收藏：星
+        WheelNode.Songs -> Icons.Default.Audiotrack        // 歌曲：音轨
+        WheelNode.Albums -> Icons.Default.Album            // 专辑：唱片
+        WheelNode.Artists -> Icons.Default.Person          // 歌手：人
+        WheelNode.Playlists -> Icons.Default.QueueMusic    // 歌单：队列
+        WheelNode.Folders -> Icons.Default.Folder          // 文件夹
+        is WheelNode.Folder -> Icons.Default.Folder        // 子文件夹
+        WheelNode.Genres -> Icons.Default.Speed            // 风格：仪表盘（不再和专辑重复）
+        WheelNode.Search -> Icons.Default.Search           // 搜索
+        is WheelNode.AlbumDetail -> Icons.Default.Album    // 专辑详情
+        is WheelNode.ArtistAlbums -> Icons.Default.Person  // 歌手详情
+        is WheelNode.PlaylistDetail -> Icons.Default.QueueMusic // 歌单详情
+        is WheelNode.GenreDetail -> Icons.Default.Speed    // 风格详情
+        else -> Icons.Default.LibraryMusic                 // 其他（含 Root）：音乐库
     }
     Box(Modifier.size(48.dp), Alignment.Center) {
-        Icon(icon, contentDescription = null, tint = fg)
+        GlassIcon(icon, iconStyle, Modifier.size(34.dp), tint = fg)
     }
 }
 

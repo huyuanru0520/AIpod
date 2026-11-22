@@ -32,9 +32,15 @@ import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
@@ -84,6 +90,8 @@ import com.aipod.ui.components.coverCacheSizeBytes
 import com.aipod.ui.components.fadeEdges
 import com.aipod.ui.components.fadeInList
 import com.aipod.ui.components.glassHighlight
+import com.aipod.ui.components.GlassIcon
+import com.aipod.ui.components.GlassIconStyle
 import com.aipod.ui.components.rememberGlassBackdrop
 import com.aipod.ui.components.LocalGlassBackdrop
 import com.aipod.ui.components.AmbientMeshBackground
@@ -119,6 +127,7 @@ fun WheelSettingsScreen(navController: NavController) {
     val reflectionTilt by app.reflectionTilt.collectAsState()
     val hapticStrength by app.hapticStrength.collectAsState()
     val glassBlurLevel by app.glassBlurLevel.collectAsState()
+    val iconStyle by app.iconStyle.collectAsState()
     val webDav by app.webDavConn.collectAsState()
     val fnos by app.fnosConn.collectAsState()
     val savedWebDav by app.savedWebDav.collectAsState()
@@ -230,7 +239,7 @@ fun WheelSettingsScreen(navController: NavController) {
     // 构建当前页条目
     val items: List<SettingItem> = when (node) {
         SettingsNode.Root ->         buildRootSettings(
-            sourceMode, audioQuality, usbExclusive, usbHighGain, scanPace, hapticStrength, glassBlurLevel, debugMode, showDescriptions, reflectionTilt,
+            sourceMode, audioQuality, usbExclusive, usbHighGain, scanPace, hapticStrength, glassBlurLevel, debugMode, showDescriptions, reflectionTilt, iconStyle,
             webDav, fnos, webDavScanning, coverCacheSize, transcodeSize, localCount, localScanning, localScanProgress,
             !localFolderUri.isNullOrBlank()
         )
@@ -285,6 +294,11 @@ fun WheelSettingsScreen(navController: NavController) {
                         3 -> "背景流光：浓郁"
                         else -> ""
                     }
+                }
+                "iconstyle" -> scope.launch {
+                    val next = (iconStyle + 1) % GlassIconStyle.COUNT
+                    app.setIconStyle(next)
+                    statusLine = "图标风格：${GlassIconStyle.label(next)}"
                 }
             }
             is SettingItem.Toggle -> when (item.key) {
@@ -508,8 +522,8 @@ fun WheelSettingsScreen(navController: NavController) {
                     // 日志页也用统一列表渲染，保证「复制 / 另存 / 展开 / 清空」选项在屏幕上可见，
                     // 转轮选中才有反馈。之前这里单独渲染 LogsScreenBody，把选项列表整个挡住，
                     // 用户转轮时在动却看不到任何选项，误以为「日志导出界面没有具体选项」。
-                    SettingsNode.Logs -> SettingsList(items = items, selected = selected, showDescriptions = true)
-                    else -> SettingsList(items = items, selected = selected, showDescriptions = showDescriptions)
+                    SettingsNode.Logs -> SettingsList(items = items, selected = selected, showDescriptions = true, iconStyle = iconStyle)
+                    else -> SettingsList(items = items, selected = selected, showDescriptions = showDescriptions, iconStyle = iconStyle)
                 }
             }
 
@@ -589,7 +603,7 @@ private fun SettingItem.subtitle(): String = when (this) {
 
 private fun buildRootSettings(
     source: SourceMode, quality: AudioQuality, usbExclusive: Boolean, usbHighGain: Boolean,
-    scanPace: Long, haptic: Int, backdropLevel: Int, debug: Boolean, showDescriptions: Boolean, reflectionTilt: Boolean, webDav: Any?, fnos: Any?, scanning: Boolean,
+    scanPace: Long, haptic: Int, backdropLevel: Int, debug: Boolean, showDescriptions: Boolean, reflectionTilt: Boolean, iconStyle: Int, webDav: Any?, fnos: Any?, scanning: Boolean,
     coverSize: Long, transcodeSize: Long, localCount: Int, localScanning: Boolean, localScanProgress: String,
     hasLocalFolder: Boolean
 ): List<SettingItem> {
@@ -615,7 +629,7 @@ private fun buildRootSettings(
         "usbhighgain", "HIGH GAIN（满幅直出）",
         if (usbHighGain) "开 · 满幅 bit-perfect，忽略音量"
         else "关 · 音量可调（独占时才有意义）",
-        Icons.Default.Audiotrack
+        Icons.Default.KeyboardArrowUp
     )
     out += SettingItem.Choice("scanpace", "扫描节奏", paceName, Icons.Default.Speed)
     out += SettingItem.Choice("haptic", "震动强度", hapticName, Icons.Default.Vibration)
@@ -636,6 +650,9 @@ private fun buildRootSettings(
         if (reflectionTilt) "开 · 倒影随手机倾斜变化" else "关 · 倒影固定不动",
         Icons.Default.Sensors
     )
+    out += SettingItem.Choice(
+        "iconstyle", "图标风格", GlassIconStyle.label(iconStyle) + " · 中心键切换", Icons.Default.Star
+    )
     out += SettingItem.Nav("webdav", "WebDAV 连接", if (webDav != null) "已配置" else "未配置", Icons.Default.Link)
     out += SettingItem.Nav("fnos", "飞牛音乐登录", if (fnos != null) "已登录" else "未登录", Icons.Default.Storage)
     out += SettingItem.Action(
@@ -648,17 +665,17 @@ private fun buildRootSettings(
         if (!hasLocalFolder) "尚未选过文件夹" else "用已保存的文件夹重扫 · 已收录 $localCount 首",
         Icons.Default.Refresh
     )
-    out += SettingItem.Action("scan", "立即扫描 WebDAV", if (scanning) "扫描中…" else "扫描音乐库", Icons.Default.Storage)
-    out += SettingItem.Action("test", "测试连接 / 诊断", "WebDAV 连接自检", Icons.Default.Link)
-    out += SettingItem.Action("probe", "检测飞牛新接口", "风格 / 文件夹 / 漫游", Icons.Default.Storage)
-    out += SettingItem.Action("usbaudio", "USB DAC / 无损输出检测", "检测 DAC 与 bit-perfect 支持", Icons.Default.Audiotrack)
+    out += SettingItem.Action("scan", "立即扫描 WebDAV", if (scanning) "扫描中…" else "扫描音乐库", Icons.Default.Search)
+    out += SettingItem.Action("test", "测试连接 / 诊断", "WebDAV 连接自检", Icons.Default.Check)
+    out += SettingItem.Action("probe", "检测飞牛新接口", "风格 / 文件夹 / 漫游", Icons.Default.Repeat)
+    out += SettingItem.Action("usbaudio", "USB DAC / 无损输出检测", "检测 DAC 与 bit-perfect 支持", Icons.Default.KeyboardArrowDown)
     out += SettingItem.Toggle("debug", "调试模式", if (debug) "已开启" else "已关闭", Icons.Default.BugReport)
     out += SettingItem.Toggle("descriptions", "说明文字", if (showDescriptions) "显示" else "已隐藏", Icons.Default.Description)
-    out += SettingItem.Nav("logs", "运行日志", "查看 / 复制 / 另存", Icons.Default.Description)
-    out += SettingItem.Action("export", "导出设置", "备份为 JSON", Icons.Default.ImportExport)
+    out += SettingItem.Nav("logs", "运行日志", "查看 / 复制 / 另存", Icons.Default.ContentCopy)
+    out += SettingItem.Action("export", "导出设置", "备份为 JSON", Icons.Default.SaveAs)
     out += SettingItem.Action("import", "导入设置", "从 JSON 恢复", Icons.Default.ImportExport)
     out += SettingItem.Action("clearcover", "清理封面缓存", "${coverSize / 1024 / 1024} MB", Icons.Default.Delete)
-    out += SettingItem.Action("cleartranscode", "清理转码缓存", "${transcodeSize / 1024 / 1024} MB", Icons.Default.Delete)
+    out += SettingItem.Action("cleartranscode", "清理转码缓存", "${transcodeSize / 1024 / 1024} MB", Icons.Default.Close)
     out += SettingItem.Nav("about", "关于", "版本 $vName", Icons.Default.Info)
     out += SettingItem.Action("back", "返回曲库", "MENU 键也可返回", Icons.Default.PlayArrow)
     return out
@@ -711,7 +728,7 @@ private fun buildAboutSettings(): List<SettingItem> = listOf(
 // ==================== 屏幕列表 ====================
 
 @Composable
-private fun SettingsList(items: List<SettingItem>, selected: Int, showDescriptions: Boolean = true) {
+private fun SettingsList(items: List<SettingItem>, selected: Int, showDescriptions: Boolean = true, iconStyle: Int = 0) {
     val listState = rememberLazyListState()
     LaunchedEffect(selected) {
         if (selected in items.indices) runCatching { listState.animateScrollToItem(selected, -180) }
@@ -750,7 +767,7 @@ private fun SettingsList(items: List<SettingItem>, selected: Int, showDescriptio
                     is SettingItem.Info -> Icons.Default.Info
                 }
                 Box(Modifier.size(30.dp), Alignment.Center) {
-                    Icon(icon, contentDescription = null, tint = fg)
+                    GlassIcon(icon, iconStyle, Modifier.size(24.dp), tint = fg)
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
