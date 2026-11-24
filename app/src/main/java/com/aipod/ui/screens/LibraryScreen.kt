@@ -335,8 +335,8 @@ internal fun buildFnosData(): SourceBrowserData {
             list.map { client.toTrack(it) } to total
         },
         loadAlbums = {
-            val (list, _) = client.albumList(1, 100)
-            list.map { al ->
+            // 全量分页拉取：只取第一页会把曲库砍到 100 张（「专辑数量不对」的根因）。
+            client.allAlbums().map { al ->
                 SourceEntry(
                     id = "fnos-album-${al.guid}",
                     name = al.name.ifBlank { "未知专辑" },
@@ -347,8 +347,7 @@ internal fun buildFnosData(): SourceBrowserData {
             }
         },
         loadArtists = {
-            val (list, _) = client.artistList(1, 100)
-            list.map { ar ->
+            client.allArtists().map { ar ->
                 SourceEntry(
                     id = "fnos-artist-${ar.guid}",
                     name = ar.name.ifBlank { "未知歌手" },
@@ -359,8 +358,7 @@ internal fun buildFnosData(): SourceBrowserData {
             }
         },
         loadPlaylists = {
-            val (list, _) = client.playlistList(1, 100)
-            list.map { pl ->
+            client.allPlaylists().map { pl ->
                 SourceEntry(
                     id = "fnos-playlist-${pl.guid}",
                     name = pl.name.ifBlank { "未命名歌单" },
@@ -373,14 +371,13 @@ internal fun buildFnosData(): SourceBrowserData {
         loadAlbumTracks = { e ->
             if (e.tracks.isNotEmpty()) e.tracks
             else {
-                val (list, _) = client.albumTracks(e.key, 1, 300)
-                list.map { client.toTrack(it) }
+                client.allAlbumTracks(e.key).map { client.toTrack(it) }
             }
         },
         loadArtistAlbums = { e ->
             if (e.albums.isNotEmpty()) e.albums
             else {
-                val (list, _) = client.artistTracks(e.key, 1, 500)
+                val list = client.allArtistTracks(e.key)
                 val grouped = LinkedHashMap<String, MutableList<Track>>()
                 list.forEach { ft ->
                     val tr = client.toTrack(ft)
@@ -400,8 +397,7 @@ internal fun buildFnosData(): SourceBrowserData {
         loadPlaylistTracks = { e ->
             if (e.tracks.isNotEmpty()) e.tracks
             else {
-                val (list, _) = client.playlistTracks(e.key, 1, 300)
-                list.map { client.toTrack(it) }
+                client.allPlaylistTracks(e.key).map { client.toTrack(it) }
             }
         },
         search = { q ->

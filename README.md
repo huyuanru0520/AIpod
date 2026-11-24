@@ -150,3 +150,7 @@ Issue / PR 都欢迎。提交前请确保 `./gradlew assembleDebug` 通过；涉
 ## License
 
 [MIT](LICENSE) © Contributors
+
+### 第三方素材
+
+- 设置中「图标主题」七套单选里的「iPod 单色 / iPod 彩色卡片」两套使用 [ipod-classic-js](https://github.com/tvillarete/ipod-classic-js) 的图标（MIT © 2019 Tanner Villarete），经提取路径、单色/卡片化适配。

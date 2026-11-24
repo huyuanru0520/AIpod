@@ -19,45 +19,44 @@ import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.text.SimpleDateFormat
+import java.util.ArrayDeque
 import java.util.Date
 import java.util.Locale
 
 /**
- * 全量运行日志：从 Application.attachBaseContext 起记录所有事件
- * （启动、登录、扫描、播放、切歌、解码器状态、错误），**启动即生成文件**，
- * 不依赖是否发生异常或报错。
+ * 全量运行日志的统一切面。
  *
- * 固定导出到 /storage/emulated/0/Download/AIpod_log.txt。
- * Android 11+ 分区存储下单一路径可能写不进去，因此同时走三条通道：
- *   1) MediaStore.Downloads（标准做法，IS_PENDING 流程 + 不带 mode 的 openOutputStream）
- *   2) 直接 File 写公共 Download 目录（部分 ROM 允许）
- *   3) 应用私有外部目录（adb 可 pull）
- * 每次刷新三条都尝试，任意一条成功即可；结果写入 writeStatus 供设置页显示。
+ * ★ 功耗重构：日志先写入**内存环形缓冲**，这是唯一的常驻存储；只有「调试模式」开启时才
+ *   额外落盘 + 打 Logcat。关闭调试（默认）时 append 不碰磁盘、不打 Logcat、不调度 flush，
+ *   实现「关闭调试 = 零日志 IO」。日志页的查看 / 复制 / 另存始终从内存缓冲读，功能不变。
+ *
+ * 落盘策略：2 秒内多条合并为一次整段 writeText（不再逐条 appendText），也不再有
+ *   「超过 512KB 就 readText 全量 + writeText 全量重写」的放大——环形缓冲自身限长，
+ *   落盘就是一次顺序写。崩溃（writeCrash）无视开关强制落盘，保证致命问题不丢。
  */
 object CrashLogger {
 
     private const val TAG = "AIpod"
     private const val FILE_NAME = "AIpod_log.txt"
     private const val FLAG = "AIpod_had_crash"
-    private const val MAX_BYTES = 512 * 1024L
-    private const val FLUSH_DELAY_MS = 1200L
+    /** 内存环形缓冲保留上限（字符），约 250KB，足够日志页查看最近若干事件。 */
+    private const val MEM_MAX_CHARS = 256 * 1024
+    /** 下载目录文件的软上限（字符），落盘时只保留尾部，避免文件无限增长。 */
+    private const val FILE_MAX_CHARS = 512 * 1024
+    /** 批量落盘间隔：2 秒内的多条合并为一次写（日志页读内存，不受此间隔影响）。 */
+    private const val FLUSH_DELAY_MS = 2000L
 
     private val lock = Any()
     private val tsFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
-    /**
-     * 调试模式总开关。**默认关闭**：关闭时不生成日志文件、不向下载目录写入，
-     * 仅保留 Logcat 输出，避免常驻 I/O 与体积庞大的日志文件。
-     * 设置页可随时切换；切换为开时立即落盘一个标记行。
-     * 例外：未捕获的崩溃（writeCrash）无论开关与否都会写盘，确保致命问题不被漏掉。
-     */
     @Volatile var enabled = false
         private set
 
     fun setEnabled(b: Boolean) {
+        val prev = enabled
         enabled = b
-        if (b) {
+        if (b && !prev) {
             append("调试模式已开启 · AIpod v${com.aipod.BuildConfig.VERSION_NAME}" +
                 " (${com.aipod.BuildConfig.VERSION_CODE})")
             flushNow()
@@ -77,19 +76,22 @@ object CrashLogger {
         ioScope.launch { flushNow() }
     }
 
-    /** 尽早安装未捕获异常处理器，并立即生成下载目录日志文件。 */
+    /** 内存环形缓冲：最近若干条日志。所有读取（日志页 / 导出）都走这里，零磁盘 IO。 */
+    private val ring = ArrayDeque<String>()
+    private var ringChars = 0
+
+    /** 尽早安装未捕获异常处理器。启动只在内存写头，不再强制落盘（关闭调试零 IO）。 */
     fun install(context: Context) {
         appContext = context.applicationContext
         internalDir = runCatching { context.filesDir }.getOrNull()
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             writeCrash(thread, throwable)
-            flushNow() // 同步落盘，不依赖 Looper（崩溃时主线程可能已停）
+            flushNowForce() // 同步落盘，不依赖 Looper（崩溃时主线程可能已停）
             previous?.uncaughtException(thread, throwable)
         }
         append(header())
         append("[${stamp()}] SESSION_START")
-        flushNow() // 启动即生成文件，不需要发生任何异常或报错
     }
 
     private fun header(): String = buildString {
@@ -101,16 +103,28 @@ object CrashLogger {
             .append(" (API ").append(Build.VERSION.SDK_INT).append(")\n")
         append("ABI: ").append(Build.SUPPORTED_ABIS.joinToString(", ")).append('\n')
         append("日志位置: ").append(logPath()).append('\n')
-        append("说明: 本文件记录全部运行事件，并非只在异常时生成。\n")
+        append("说明: 关闭调试时日志仅存内存、不写文件；开启调试后同步到下载目录。\n")
         append("--------------------------------\n")
     }
+
+    // ---------- 统一入口 ----------
 
     fun mark(msg: String) = append("[${stamp()}] $msg")
     fun info(tag: String, msg: String) = append("[${stamp()}] INFO/$tag: $msg")
 
+    /**
+     * 调试级日志：高频诊断专用（如 WaveProbe、每次网络请求）。
+     * msg 为惰性 lambda —— 关闭调试时连字符串都不会拼接，彻底零开销。
+     */
+    fun debug(tag: String, msg: () -> String) {
+        if (!enabled) return
+        append("[${stamp()}] DEBUG/$tag: ${msg()}")
+    }
+
     fun error(tag: String, t: Throwable) {
         val text = stack(t)
         append("=== ERROR: $tag ===\n$text")
+        // error 始终打 Logcat（稀有事件，且崩溃排查需要）
         Log.e(TAG, "$tag\n$text")
     }
 
@@ -126,10 +140,12 @@ object CrashLogger {
     private fun writeCrash(thread: Thread, t: Throwable) {
         val text = stack(t)
         // 崩溃强制写盘（无视 enabled 开关），保证致命问题一定能留下记录
-        appendForce("=== UNCAUGHT on ${thread.name} ===\n$text")
+        val line = "=== UNCAUGHT on ${thread.name} ===\n$text"
+        pushRing(line)
         Log.e(TAG, "UNCAUGHT\n$text")
         hadCrash = true
         runCatching { internalDir?.let { File(it, FLAG).writeText("1") } }
+        writeFileForce(line)
         flushNowForce()
     }
 
@@ -142,25 +158,18 @@ object CrashLogger {
         runCatching { internalDir?.let { File(it, FLAG).delete() } }
     }
 
-    /** 全量日志文本（尾部截断，供复制 / 诊断页 / 另存使用）。 */
-    fun read(): String? = runCatching {
-        val f = internalDir?.let { File(it, FILE_NAME) } ?: return@runCatching null
-        val text = synchronized(lock) {
-            if (f.exists() && f.length() > 0L) f.readText() else null
-        }
-        text?.takeLast(60000)
-    }.getOrNull()
+    /** 全量日志文本（尾部截断，供复制 / 诊断页 / 另存使用）——从内存缓冲读，零磁盘 IO。 */
+    fun read(): String? = synchronized(lock) {
+        if (ring.isEmpty()) null else ring.joinToString("\n").takeLast(60000)
+    }
 
     /** 完整日志（不截断），用于写入下载目录。 */
-    fun fullText(): String = runCatching {
-        val f = internalDir?.let { File(it, FILE_NAME) } ?: return@runCatching ""
-        synchronized(lock) { if (f.exists()) f.readText() else "" }
-    }.getOrDefault("")
+    fun fullText(): String = synchronized(lock) { ring.joinToString("\n") }
 
     /** 用户明确要求的真实路径。 */
     fun logPath(): String = "/storage/emulated/0/Download/$FILE_NAME"
 
-    /** 立即把当前全量日志写入所有可能的下载目录通道。调试模式关闭时为 no-op。 */
+    /** 立即同步到下载目录。调试模式关闭时为 no-op。 */
     fun flushNow() {
         if (!enabled) return
         flushNowForce()
@@ -168,8 +177,10 @@ object CrashLogger {
 
     /** 强制写盘（崩溃兜底用，不受 enabled 影响）。 */
     private fun flushNowForce() {
-        val text = fullText()
+        val text = fullText().takeLast(FILE_MAX_CHARS)
         if (text.isBlank()) return
+        // 先写内部文件（一次整段写），再同步下载目录三通道
+        writeFileForce(text, replace = true)
         val ctx = appContext ?: return
         val a = writeViaMediaStore(ctx, text)
         val b = writeViaDirectFile(ctx, text)
@@ -187,7 +198,6 @@ object CrashLogger {
         val ctx = appContext
         val sb = StringBuilder(logPath()).append('\n')
 
-        // 优先看直接文件
         val direct = runCatching {
             File("/storage/emulated/0/Download", FILE_NAME).takeIf { it.exists() }?.length()
         }.getOrNull()
@@ -212,12 +222,13 @@ object CrashLogger {
     private fun kb(bytes: Long) = String.format(Locale.US, "%.1f", bytes / 1024.0)
 
     fun clear() {
+        synchronized(lock) {
+            ring.clear()
+            ringChars = 0
+        }
         runCatching {
             val d = internalDir ?: return@runCatching
-            synchronized(lock) {
-                File(d, FLAG).delete()
-                File(d, FILE_NAME).writeText("")
-            }
+            synchronized(lock) { File(d, FLAG).delete() }
         }
         hadCrash = false
         append(header())
@@ -225,39 +236,41 @@ object CrashLogger {
         flushNow()
     }
 
+    /**
+     * 写入统一入口：无论开关与否都进内存缓冲（日志页随时可读）。
+     * 关闭调试时不打 Logcat、不调度 flush —— 这是「关闭调试 = 零 IO」的关键。
+     */
     private fun append(line: String) {
-        // 日志始终写入内部文件（filesDir/AIpod_log.txt），这样「运行日志」页的
-        // 查看 / 复制 / 另存 永远有内容，不必依赖调试模式开关。
-        // 调试模式只控制是否把日志同步到公共 Download 目录（见 flushNow / scheduleFlush）。
-        // 之前这里在 enabled=false 时直接 return，导致日志页点了没内容、导出为空。
-        if (Log.isLoggable(TAG, Log.DEBUG) || enabled) Log.d(TAG, line)
-        writeFile(line)
+        pushRing(line)
+        if (enabled) {
+            Log.d(TAG, line)
+            scheduleFlush()
+        }
     }
 
-    /** 强制落盘（忽略 enabled 开关），用于崩溃兜底。 */
-    private fun appendForce(line: String) {
-        Log.d(TAG, line)
-        writeFile(line)
-    }
-
-    private fun writeFile(line: String) {
-        runCatching {
-            synchronized(lock) {
-                val d = internalDir
-                if (d != null) {
-                    val f = File(d, FILE_NAME)
-                    if (f.exists() && f.length() > MAX_BYTES) {
-                        val tail = f.readText().takeLast((MAX_BYTES / 2).toInt())
-                        f.writeText("(日志已截断，保留最近部分)\n$tail")
-                    }
-                    f.appendText(line + "\n")
-                }
+    /** 入环形缓冲并限长（纯内存操作）。 */
+    private fun pushRing(line: String) {
+        synchronized(lock) {
+            ring.addLast(line)
+            ringChars += line.length
+            while (ringChars > MEM_MAX_CHARS && ring.size > 1) {
+                ringChars -= ring.removeFirst().length
             }
         }
-        scheduleFlush()
     }
 
-    /** 日志合并写：1.2 秒内的多条事件只做一次 I/O。 */
+    /** 整段写内部文件：replace=true 覆盖（合并落盘），否则追加（崩溃兜底单条）。 */
+    private fun writeFileForce(line: String, replace: Boolean = false) {
+        runCatching {
+            synchronized(lock) {
+                val d = internalDir ?: return@runCatching
+                val f = File(d, FILE_NAME)
+                if (replace) f.writeText(line + "\n") else f.appendText(line + "\n")
+            }
+        }
+    }
+
+    /** 日志合并写：1.2 秒内的多条事件只做一次 I/O（仅 enabled 时会被调度）。 */
     private fun scheduleFlush() {
         if (scheduled) return
         scheduled = true
@@ -270,9 +283,7 @@ object CrashLogger {
 
     /**
      * 通道 1：MediaStore.Downloads。
-     * 之前用 openOutputStream(uri, "rwt") 在 Android 16 被 MediaProvider 拒绝，
-     * 写入失败又被 runCatching 吞掉，于是下载目录里始终没有文件。
-     * 现在用不带 mode 的 openOutputStream（默认 "w"，自动 truncate）+ 标准 IS_PENDING 流程。
+     * 用不带 mode 的 openOutputStream（默认 "w"，自动 truncate）+ 标准 IS_PENDING 流程。
      */
     private fun writeViaMediaStore(ctx: Context, content: String): Boolean = runCatching {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@runCatching false
@@ -300,7 +311,6 @@ object CrashLogger {
         })
 
         fun write(uri: Uri): Boolean = runCatching {
-            // 不带 mode：默认 "w"，MediaProvider 必然支持
             resolver.openOutputStream(uri)?.use { os ->
                 os.write(bytes)
                 os.flush()
@@ -321,7 +331,6 @@ object CrashLogger {
         var uri = find() ?: insert() ?: return@runCatching false
         var ok = write(uri)
         if (!ok) {
-            // 记录存在但底层文件不可写（如被用户删除后 MediaStore 残留）：删掉重建
             runCatching { resolver.delete(uri, null, null) }
             val fresh = insert() ?: return@runCatching false
             uri = fresh
@@ -334,13 +343,9 @@ object CrashLogger {
         false
     }
 
-    /**
-     * 把任意文本以指定文件名写入下载目录（MediaStore），返回可读路径；失败返回 null。
-     * 供「设置 JSON 导出」等场景复用，与日志写盘走同一套已验证的 MediaStore 流程。
-     */
+    /** 通用 MediaStore 文本写入（文件名 / MIME 可指定），供设置 JSON 导出复用。 */
     fun saveTextToDownloads(filename: String, mime: String, text: String): String? {
         val ctx = appContext ?: return null
-        // Android 10+ 走 MediaStore；以下走公共 Download 目录直写（老设备无分区存储）。
         val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             writeTextViaMediaStore(ctx, filename, mime, text)
         } else {
@@ -355,7 +360,6 @@ object CrashLogger {
         return if (ok) "/storage/emulated/0/Download/$filename" else null
     }
 
-    /** 通用 MediaStore 文本写入（文件名 / MIME 可指定），复用通道 1 的已验证流程。 */
     private fun writeTextViaMediaStore(ctx: Context, filename: String, mime: String, content: String): Boolean =
         runCatching {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@runCatching false
@@ -409,10 +413,7 @@ object CrashLogger {
             false
         }
 
-    /**
-     * 通道 2：直接写 /storage/emulated/0/Download（用户指定的路径）。
-     * Android 11+ 分区存储下可能被拒绝，但不少 ROM 允许，成功即可，失败不影响其它通道。
-     */
+    /** 通道 2：直接写 /storage/emulated/0/Download（分区存储下部分 ROM 允许）。 */
     private fun writeViaDirectFile(ctx: Context, content: String): Boolean {
         val candidates = mutableListOf(File("/storage/emulated/0/Download", FILE_NAME))
         runCatching {

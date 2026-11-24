@@ -1,11 +1,13 @@
 package com.aipod.data
 
+import okhttp3.Cache
 import okhttp3.ConnectionSpec
 import okhttp3.Credentials
 import okhttp3.Dispatcher
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
+import java.io.File
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.util.concurrent.ConcurrentHashMap
@@ -106,16 +108,25 @@ class AuthInterceptor(private val registry: AuthRegistry) : Interceptor {
     }
 }
 
-fun createOkHttpClient(registry: AuthRegistry): OkHttpClient =
-    OkHttpClient.Builder()
+fun createOkHttpClient(registry: AuthRegistry, cacheDir: File? = null): OkHttpClient =
+    OkHttpClient.Builder().apply {
         // 默认 Dispatcher 对「同一主机」只放行 5 个并发请求，会把扫描的并行度死死卡在 5。
         // 扫描（大量并行 PROPFIND / STRM 标签下载）需要更高并发，这里放宽到 24 路/主机、总 160。
-        .dispatcher(
+        dispatcher(
             Dispatcher().apply {
                 maxRequests = 160
                 maxRequestsPerHost = 24
             }
         )
+        // 响应缓存：封面缩略图等带 Cache-Control 的静态资源命中后不再走网络，省无线电与电量。
+        // WebDAV 的 PROPFIND / 音频流本身不带可缓存头，不会被缓存，功能不受影响。
+        if (cacheDir != null) {
+            runCatching {
+                val dir = File(cacheDir, "http_cache").apply { if (!exists()) mkdirs() }
+                cache(Cache(dir, 32L * 1024 * 1024))
+            }
+        }
+    }
         .addInterceptor(AuthInterceptor(registry))
         .followRedirects(true)
         .followSslRedirects(true)

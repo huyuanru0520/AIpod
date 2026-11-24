@@ -90,6 +90,16 @@ import com.aipod.ui.components.fadeEdges
 import com.aipod.ui.components.fadeInList
 import com.aipod.ui.components.glassHighlight
 import com.aipod.ui.components.GlassIcon
+import com.aipod.ui.components.ThemedIcon
+import com.aipod.ui.icons.ipod_song
+import com.aipod.ui.icons.ipod_album
+import com.aipod.ui.icons.ipod_artist
+import com.aipod.ui.icons.ipod_playlist
+import com.aipod.ui.icons.ipod_search
+import com.aipod.ui.icons.ipod_favorite
+import com.aipod.ui.icons.ipod_folder
+import com.aipod.ui.icons.ipod_genre
+import com.aipod.ui.icons.ipod_nowplaying
 import com.aipod.ui.components.rememberGlassBackdrop
 import com.aipod.ui.components.LocalGlassBackdrop
 import com.aipod.ui.components.AmbientMeshBackground
@@ -178,8 +188,8 @@ internal fun WheelHome(
     val queue by PlayerController.queue.collectAsState()
     val currentIndex by PlayerController.currentIndex.collectAsState()
     val currentTrack = queue.getOrNull(currentIndex)
-    // 列表图标玻璃风格（设置页循环切换，0=透明玻璃）
-    val iconStyle by MusicBoxApp.instance.iconStyle.collectAsState()
+    // 列表图标主题（七套互斥单选，0=透明玻璃）
+    val iconTheme by MusicBoxApp.instance.iconTheme.collectAsState()
 
     // 浏览栈：每一层是一个 WheelNode，中心键 push，MENU pop。
     var stack by remember(data) { mutableStateOf<List<WheelNode>>(listOf(WheelNode.Root)) }
@@ -472,7 +482,7 @@ internal fun WheelHome(
                                 items = shownItems,
                                 selected = shownSelected,
                                 immersive = false,
-                                iconStyle = iconStyle
+                                iconTheme = iconTheme
                             )
                         }
                     }
@@ -766,7 +776,7 @@ private fun WheelList(
     items: List<WheelItem>,
     selected: Int,
     immersive: Boolean,
-    iconStyle: Int = 0
+    iconTheme: Int = 0
 ) {
     val listState = rememberLazyListState()
     // 选中项变化时滚动，按跨度分两种走法：
@@ -824,14 +834,18 @@ private fun WheelList(
                     when (item) {
                         is WheelItem.Action -> {
                             Box(Modifier.size(48.dp), Alignment.Center) {
-                                GlassIcon(item.icon, iconStyle, Modifier.size(34.dp), tint = fg)
+                                ThemedIcon(
+                                    material = item.icon,
+                                    ipod = ipodForAction(item.key),
+                                    theme = iconTheme, size = 34.dp, tint = fg
+                                )
                             }
                         }
                         is WheelItem.Op -> {
                             if (item.cover != null || item.embedded != null) {
                                 CoverImage(item.cover, Modifier.size(48.dp), embeddedAudioUrl = item.embedded)
                             } else {
-                                CategoryIcon(item.node, sel, fg, iconStyle)
+                                CategoryIcon(item.node, sel, fg, iconTheme)
                             }
                         }
                         is WheelItem.Track -> {
@@ -857,27 +871,46 @@ private fun WheelList(
 }
 
 @Composable
-private fun CategoryIcon(node: WheelNode, selected: Boolean, fg: Color, iconStyle: Int = 0) {
+private fun CategoryIcon(node: WheelNode, selected: Boolean, fg: Color, iconTheme: Int = 0) {
     // 每个栏目分配互不相同的形状，避免列表里出现「好几个一样的图标」。
-    val icon = when (node) {
-        WheelNode.Favorites -> Icons.Default.Star          // 我的收藏：星
-        WheelNode.Songs -> Icons.Default.Audiotrack        // 歌曲：音轨
-        WheelNode.Albums -> Icons.Default.Album            // 专辑：唱片
-        WheelNode.Artists -> Icons.Default.Person          // 歌手：人
-        WheelNode.Playlists -> Icons.Default.QueueMusic    // 歌单：队列
-        WheelNode.Folders -> Icons.Default.Folder          // 文件夹
-        is WheelNode.Folder -> Icons.Default.Folder        // 子文件夹
-        WheelNode.Genres -> Icons.Default.Speed            // 风格：仪表盘（不再和专辑重复）
-        WheelNode.Search -> Icons.Default.Search           // 搜索
-        is WheelNode.AlbumDetail -> Icons.Default.Album    // 专辑详情
-        is WheelNode.ArtistAlbums -> Icons.Default.Person  // 歌手详情
-        is WheelNode.PlaylistDetail -> Icons.Default.QueueMusic // 歌单详情
-        is WheelNode.GenreDetail -> Icons.Default.Speed    // 风格详情
-        else -> Icons.Default.LibraryMusic                 // 其他（含 Root）：音乐库
+    // material = 默认图标；ipod = iPod 图标包对应形状（无素材则 null 回退）。
+    val material = when (node) {
+        WheelNode.Favorites -> Icons.Default.Star
+        WheelNode.Songs -> Icons.Default.Audiotrack
+        WheelNode.Albums -> Icons.Default.Album
+        WheelNode.Artists -> Icons.Default.Person
+        WheelNode.Playlists -> Icons.Default.QueueMusic
+        WheelNode.Folders, is WheelNode.Folder -> Icons.Default.Folder
+        WheelNode.Genres -> Icons.Default.Speed
+        WheelNode.Search -> Icons.Default.Search
+        is WheelNode.AlbumDetail -> Icons.Default.Album
+        is WheelNode.ArtistAlbums -> Icons.Default.Person
+        is WheelNode.PlaylistDetail -> Icons.Default.QueueMusic
+        is WheelNode.GenreDetail -> Icons.Default.Speed
+        else -> Icons.Default.LibraryMusic
+    }
+    val ipod = when (node) {
+        WheelNode.Favorites -> ipod_favorite
+        WheelNode.Songs -> ipod_song
+        WheelNode.Albums, is WheelNode.AlbumDetail -> ipod_album
+        WheelNode.Artists, is WheelNode.ArtistAlbums -> ipod_artist
+        WheelNode.Playlists, is WheelNode.PlaylistDetail -> ipod_playlist
+        WheelNode.Folders, is WheelNode.Folder -> ipod_folder
+        WheelNode.Genres, is WheelNode.GenreDetail -> ipod_genre
+        WheelNode.Search -> ipod_search
+        else -> null
     }
     Box(Modifier.size(48.dp), Alignment.Center) {
-        GlassIcon(icon, iconStyle, Modifier.size(34.dp), tint = fg)
+        ThemedIcon(material, ipod, iconTheme, size = 34.dp, tint = fg)
     }
+}
+
+/** Action 项在 iPod 图标包下的形状映射（无对应则回退 Material）。 */
+private fun ipodForAction(key: String) = when (key) {
+    "search" -> ipod_search
+    "now_playing" -> ipod_nowplaying
+    "favorites", "favorite" -> ipod_favorite
+    else -> null
 }
 
 // ==================== 横屏：全屏 CoverFlow 唱片架（左右滑动 + 点击选择） ====================

@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.MediaStore
-import android.util.Log
 import com.aipod.data.SourceType
 import com.aipod.data.Track
 import com.aipod.util.CrashLogger
@@ -20,8 +19,6 @@ import kotlinx.coroutines.withContext
  * ExoPlayer；封面走内嵌标签解析（见 Components 的 embedded 通道）。
  */
 object LocalMusicScanner {
-
-    private const val TAG = "LocalMusicScanner"
 
     /** 常见音频扩展名（小写）。 */
     private val AUDIO_EXT = setOf(
@@ -57,7 +54,6 @@ object LocalMusicScanner {
         walk(context, treeUri, rootId, "", found, onProgress, { dirsVisited++ }, { filesSeen++ })
         found.sortBy { "${it.folder}/${it.title}".lowercase() }
         val summary = "本地扫描完成：${found.size} 首（遍历 $dirsVisited 个目录 / 见到 $filesSeen 个文件）根=$treeUri"
-        Log.i(TAG, summary)
         CrashLogger.info("LocalScan", summary)
         found
     }
@@ -77,7 +73,7 @@ object LocalMusicScanner {
         val childrenUri = try {
             DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
         } catch (e: Exception) {
-            Log.w(TAG, "构造子目录 URI 失败 $parentDocId: ${e.message}")
+            CrashLogger.info("LocalScan", "构造子目录 URI 失败 $parentDocId: ${e.message}")
             return
         }
         val projection = arrayOf(
@@ -89,7 +85,6 @@ object LocalMusicScanner {
         val cursor = try {
             context.contentResolver.query(childrenUri, projection, null, null, null)
         } catch (e: Exception) {
-            Log.w(TAG, "查询目录失败 $parentDocId: ${e.message}")
             CrashLogger.info("LocalScan", "查询目录失败 $parentDocId: ${e.message}")
             return
         } ?: run {
@@ -154,7 +149,7 @@ object LocalMusicScanner {
             retr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)
                 ?.toIntOrNull()?.let { sampleRate = it }
         } catch (e: Exception) {
-            Log.w(TAG, "读取元数据失败 $displayName: ${e.message}")
+            CrashLogger.info("LocalScan", "读取元数据失败 $displayName: ${e.message}")
         } finally {
             runCatching { retr.release() }
         }

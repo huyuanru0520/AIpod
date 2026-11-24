@@ -6,6 +6,9 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -25,6 +28,7 @@ import androidx.palette.graphics.Palette
 import com.aipod.util.CrashLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 import kotlin.math.cos
 import kotlin.math.max
@@ -215,6 +219,12 @@ private object AmbientPaletteStore {
     @Volatile
     var last: AmbientPalette? = null
 
+    /**
+     * 当前生效色板的可观察快照，供「背景之外」的组件（如 iPod 彩色玻璃卡片图标）取同一份
+     * 封面色。背景取色成功写入时同步 emit，于是切歌 / 切封面会自动带着卡片一起变色。
+     */
+    val snapshot = MutableStateFlow<AmbientPalette?>(null)
+
     fun get(key: String?): AmbientPalette? {
         if (key == null) return null
         return runCatching { cache.get(key) }.getOrNull()
@@ -222,9 +232,18 @@ private object AmbientPaletteStore {
 
     fun put(key: String?, palette: AmbientPalette) {
         last = palette
+        snapshot.value = palette
         if (key != null) runCatching { cache.put(key, palette) }
     }
 }
+
+/**
+ * 观察当前封面色板（与背景同源）。没有取过色时返回 null，调用方自行兜底。
+ * 只用于轻量装饰组件取封面色，避免它们各自重复跑一遍 Palette 取色。
+ */
+@Composable
+fun rememberAmbientPaletteSnapshot(): State<AmbientPalette?> =
+    AmbientPaletteStore.snapshot.collectAsState()
 
 /** 取封面环境色（异步，切歌自动重新取）；同一张封面只算一次，结果进 [AmbientPaletteStore]。 */
 @Composable
@@ -323,6 +342,9 @@ fun AmbientMeshBackground(
     cacheKey: String? = null
 ) {
     val extracted = rememberAmbientPalette(bitmap, fallback, cacheKey)
+    // 把最终生效色板同步给背景之外的装饰组件（如 iPod 彩色玻璃卡片图标），
+    // 覆盖「命中缓存 / 新取色 / 无封面兜底」所有分支，切歌时它们跟着背景一起变色。
+    LaunchedEffect(extracted) { AmbientPaletteStore.put(cacheKey, extracted) }
     // 切歌/封面加载完成时颜色不要"啪"地一跳：五色各自 600ms 过渡。
     // 这些 State 只在 draw 里读，过渡期间的逐帧变化只触发重绘、不触发重组。
     val baseS = animateColorAsState(extracted.base, tween(600), label = "meshBase")
@@ -341,8 +363,13 @@ fun AmbientMeshBackground(
     val phase by produceState(0f) {
         val start = SystemClock.uptimeMillis()
         while (true) {
-            value = (SystemClock.uptimeMillis() - start) / 1000f
-            delay(40)
+            if (com.aipod.util.AppForeground.active) {
+                value = (SystemClock.uptimeMillis() - start) / 1000f
+                delay(40)
+            } else {
+                // 后台：画面不可见，低频空转不重绘；回前台首帧按墙钟直接算出正确相位，不会跳变。
+                delay(1000)
+            }
         }
     }
 

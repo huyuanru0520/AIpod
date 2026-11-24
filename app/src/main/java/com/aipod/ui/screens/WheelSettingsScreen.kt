@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ImportExport
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
@@ -90,8 +91,8 @@ import com.aipod.ui.components.coverCacheSizeBytes
 import com.aipod.ui.components.fadeEdges
 import com.aipod.ui.components.fadeInList
 import com.aipod.ui.components.glassHighlight
-import com.aipod.ui.components.GlassIcon
-import com.aipod.ui.components.GlassIconStyle
+import com.aipod.ui.components.ThemedIcon
+import com.aipod.ui.components.IconTheme
 import com.aipod.ui.components.rememberGlassBackdrop
 import com.aipod.ui.components.LocalGlassBackdrop
 import com.aipod.ui.components.AmbientMeshBackground
@@ -127,7 +128,7 @@ fun WheelSettingsScreen(navController: NavController) {
     val reflectionTilt by app.reflectionTilt.collectAsState()
     val hapticStrength by app.hapticStrength.collectAsState()
     val glassBlurLevel by app.glassBlurLevel.collectAsState()
-    val iconStyle by app.iconStyle.collectAsState()
+    val iconTheme by app.iconTheme.collectAsState()
     val webDav by app.webDavConn.collectAsState()
     val fnos by app.fnosConn.collectAsState()
     val savedWebDav by app.savedWebDav.collectAsState()
@@ -239,7 +240,7 @@ fun WheelSettingsScreen(navController: NavController) {
     // 构建当前页条目
     val items: List<SettingItem> = when (node) {
         SettingsNode.Root ->         buildRootSettings(
-            sourceMode, audioQuality, usbExclusive, usbHighGain, scanPace, hapticStrength, glassBlurLevel, debugMode, showDescriptions, reflectionTilt, iconStyle,
+            sourceMode, audioQuality, usbExclusive, usbHighGain, scanPace, hapticStrength, glassBlurLevel, debugMode, showDescriptions, reflectionTilt, iconTheme,
             webDav, fnos, webDavScanning, coverCacheSize, transcodeSize, localCount, localScanning, localScanProgress,
             !localFolderUri.isNullOrBlank()
         )
@@ -295,10 +296,10 @@ fun WheelSettingsScreen(navController: NavController) {
                         else -> ""
                     }
                 }
-                "iconstyle" -> scope.launch {
-                    val next = (iconStyle + 1) % GlassIconStyle.COUNT
-                    app.setIconStyle(next)
-                    statusLine = "图标风格：${GlassIconStyle.label(next)}"
+                "icontheme" -> scope.launch {
+                    val next = (iconTheme + 1) % IconTheme.COUNT
+                    app.setIconTheme(next)
+                    statusLine = "图标主题 ${next + 1}/${IconTheme.COUNT}：${IconTheme.label(next)}"
                 }
             }
             is SettingItem.Toggle -> when (item.key) {
@@ -522,8 +523,8 @@ fun WheelSettingsScreen(navController: NavController) {
                     // 日志页也用统一列表渲染，保证「复制 / 另存 / 展开 / 清空」选项在屏幕上可见，
                     // 转轮选中才有反馈。之前这里单独渲染 LogsScreenBody，把选项列表整个挡住，
                     // 用户转轮时在动却看不到任何选项，误以为「日志导出界面没有具体选项」。
-                    SettingsNode.Logs -> SettingsList(items = items, selected = selected, showDescriptions = true, iconStyle = iconStyle)
-                    else -> SettingsList(items = items, selected = selected, showDescriptions = showDescriptions, iconStyle = iconStyle)
+                    SettingsNode.Logs -> SettingsList(items = items, selected = selected, showDescriptions = true, iconTheme = iconTheme)
+                    else -> SettingsList(items = items, selected = selected, showDescriptions = showDescriptions, iconTheme = iconTheme)
                 }
             }
 
@@ -603,7 +604,7 @@ private fun SettingItem.subtitle(): String = when (this) {
 
 private fun buildRootSettings(
     source: SourceMode, quality: AudioQuality, usbExclusive: Boolean, usbHighGain: Boolean,
-    scanPace: Long, haptic: Int, backdropLevel: Int, debug: Boolean, showDescriptions: Boolean, reflectionTilt: Boolean, iconStyle: Int, webDav: Any?, fnos: Any?, scanning: Boolean,
+    scanPace: Long, haptic: Int, backdropLevel: Int, debug: Boolean, showDescriptions: Boolean, reflectionTilt: Boolean, iconTheme: Int, webDav: Any?, fnos: Any?, scanning: Boolean,
     coverSize: Long, transcodeSize: Long, localCount: Int, localScanning: Boolean, localScanProgress: String,
     hasLocalFolder: Boolean
 ): List<SettingItem> {
@@ -651,7 +652,9 @@ private fun buildRootSettings(
         Icons.Default.Sensors
     )
     out += SettingItem.Choice(
-        "iconstyle", "图标风格", GlassIconStyle.label(iconStyle) + " · 中心键切换", Icons.Default.Star
+        "icontheme", "图标主题",
+        "${iconTheme + 1}/${IconTheme.COUNT} · ${IconTheme.label(iconTheme)} · 中心键切换",
+        Icons.Default.Star
     )
     out += SettingItem.Nav("webdav", "WebDAV 连接", if (webDav != null) "已配置" else "未配置", Icons.Default.Link)
     out += SettingItem.Nav("fnos", "飞牛音乐登录", if (fnos != null) "已登录" else "未登录", Icons.Default.Storage)
@@ -728,7 +731,7 @@ private fun buildAboutSettings(): List<SettingItem> = listOf(
 // ==================== 屏幕列表 ====================
 
 @Composable
-private fun SettingsList(items: List<SettingItem>, selected: Int, showDescriptions: Boolean = true, iconStyle: Int = 0) {
+private fun SettingsList(items: List<SettingItem>, selected: Int, showDescriptions: Boolean = true, iconTheme: Int = 0) {
     val listState = rememberLazyListState()
     LaunchedEffect(selected) {
         if (selected in items.indices) runCatching { listState.animateScrollToItem(selected, -180) }
@@ -767,7 +770,8 @@ private fun SettingsList(items: List<SettingItem>, selected: Int, showDescriptio
                     is SettingItem.Info -> Icons.Default.Info
                 }
                 Box(Modifier.size(30.dp), Alignment.Center) {
-                    GlassIcon(icon, iconStyle, Modifier.size(24.dp), tint = fg)
+                    // 设置项无专属 iPod 素材，iPod 主题下回退 Material 形状但套用对应主题的视觉风格
+                    ThemedIcon(icon, null, iconTheme, size = 24.dp, tint = fg)
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {

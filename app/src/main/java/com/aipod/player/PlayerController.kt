@@ -344,6 +344,24 @@ object PlayerController {
         MusicBoxApp.instance.savePlayback(snapshot)
     }
 
+    /**
+     * 播放轮询专用轻量落盘：只写进度 / 播放态，不重写整份队列 JSON。
+     * 与完整快照共用 lastPersistAt 节流和 restoring 抑制；队列为空时不写。
+     * 队列、索引的落盘完全由 persistSnapshot(force=true) 在低频事件里负责。
+     */
+    private fun persistProgress() {
+        if (restoring) return
+        if (_queue.value.isEmpty()) return
+        val now = System.currentTimeMillis()
+        if (now - lastPersistAt < PERSIST_INTERVAL_MS) return
+        lastPersistAt = now
+        val p = player
+        MusicBoxApp.instance.saveProgress(
+            (p?.currentPosition ?: _position.value).coerceAtLeast(0L),
+            p?.isPlaying ?: _isPlaying.value
+        )
+    }
+
     /** 退到后台 / 页面暂停时强制落盘一次（Activity.onStop 调用）。 */
     fun persistOnBackground() = persistSnapshot(force = true)
 
@@ -394,11 +412,20 @@ object PlayerController {
                         _buffered.value = it.bufferedPosition.coerceAtLeast(0)
                     }
                 }
-                // 播放进度节流落盘：最多每 4 秒一次，进程被杀时最多丢 4 秒进度
-                if (_isPlaying.value) persistSnapshot()
-                // 播放中 500ms 刷新一次进度；暂停时降到 1.5s —— 暂停状态下没人需要实时进度，
-                // 却会每 0.5s 唤醒一次线程并触发界面重组，长时间挂着是纯浪费电。
-                delay(if (_isPlaying.value) 500L else 1500L)
+                // 播放进度节流落盘：最多每 4 秒一次，进程被杀时最多丢 4 秒进度。
+                // 轮询走轻量写（只更新 position/playing 两个 key，不重写整份队列 JSON）；
+                // 队列/索引由切歌/切源/后台等 force 完整写负责。两种写共用 lastPersistAt，
+                // force 完整写会刷新时间戳，之后 4 秒内轮询不再重复落盘。
+                if (_isPlaying.value) persistProgress()
+                // 前台：播放中 500ms 刷新进度，暂停 1.5s；后台：界面不可见，降到 2s 省电，
+                // 但保留进度值更新与节流写盘，回前台即时正确、后台被杀也不丢太多进度。
+                // 播放解码 / MediaSession 走前台服务，完全不读这个标志，后台播放不受影响。
+                val foreground = com.aipod.util.AppForeground.active
+                delay(when {
+                    !foreground -> 2000L
+                    _isPlaying.value -> 500L
+                    else -> 1500L
+                })
             }
         }
     }

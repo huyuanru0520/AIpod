@@ -431,7 +431,7 @@ class FnosClient(private val okHttp: OkHttpClient, private val registry: AuthReg
         }
 
     private fun getJsonOn(base: String, path: String, params: List<Pair<String, String>>): JsonObject {
-            CrashLogger.info("FnOS", "GET $path（线路 $base）")
+            CrashLogger.debug("FnOS") { "GET $path（线路 $base）" }
             val url = buildString {
                 append(base); append(path)
                 if (params.isNotEmpty()) {
@@ -453,11 +453,10 @@ class FnosClient(private val okHttp: OkHttpClient, private val registry: AuthReg
             }
             // 记录响应顶层结构，便于按具体固件返回定位「专辑页报错」一类问题。
             // 解析全部走宽松 JsonObject 提取，任何字段类型不符都只会退化为 null，不会抛异常。
-            CrashLogger.info(
-                "FnOS",
+            CrashLogger.debug("FnOS") {
                 "$path 响应顶层键=${root.keys.joinToString(",")}；" +
                     "data 类型=${root["data"]?.let { it::class.java.simpleName } ?: "null"}"
-            )
+            }
             val code = root.pickInt("code") ?: 0
             val msg = root.pickStr("msg", "message").orEmpty()
             if (code == 401 || code == 120001 || msg.contains("invalid token", ignoreCase = true)) {
@@ -473,19 +472,19 @@ class FnosClient(private val okHttp: OkHttpClient, private val registry: AuthReg
         val params = mutableListOf("page" to page.toString(), "size" to size.toString())
         sort?.let { params.add("sort" to it) }
         val r = pageOf(getJson("/track/list", params)) { parseTrack(it) }
-        CrashLogger.info("FnOS", "trackList page=$page 返回 ${r.first.size} 首 / total=${r.second}")
+        CrashLogger.debug("FnOS") { "trackList page=$page 返回 ${r.first.size} 首 / total=${r.second}" }
         return r
     }
 
     suspend fun albumList(page: Int, size: Int = 50): Pair<List<FnosAlbum>, Int> {
         val r = pageOf(getJson("/album/list", listOf("page" to page.toString(), "size" to size.toString()))) { parseAlbum(it) }
-        CrashLogger.info("FnOS", "albumList page=$page 返回 ${r.first.size} 张 / total=${r.second}")
+        CrashLogger.debug("FnOS") { "albumList page=$page 返回 ${r.first.size} 张 / total=${r.second}" }
         return r
     }
 
     suspend fun artistList(page: Int, size: Int = 50): Pair<List<FnosArtist>, Int> {
         val r = pageOf(getJson("/artist/list", listOf("page" to page.toString(), "size" to size.toString()))) { parseArtist(it) }
-        CrashLogger.info("FnOS", "artistList page=$page 返回 ${r.first.size} 位 / total=${r.second}")
+        CrashLogger.debug("FnOS") { "artistList page=$page 返回 ${r.first.size} 位 / total=${r.second}" }
         return r
     }
 
@@ -546,7 +545,7 @@ class FnosClient(private val okHttp: OkHttpClient, private val registry: AuthReg
             // 此时仍要用 genreName 参数再试一次，不能因为两者相等就跳过。
             r = query("genreName", genreName)
         }
-        CrashLogger.info("FnOS", "genreTracks($genreGUID) 返回 ${r.first.size} 首 / total=${r.second}")
+        CrashLogger.debug("FnOS") { "genreTracks($genreGUID) 返回 ${r.first.size} 首 / total=${r.second}" }
         return r
     }
 
@@ -563,6 +562,55 @@ class FnosClient(private val okHttp: OkHttpClient, private val registry: AuthReg
         CrashLogger.info("FnOS", "allTracks 完成：${out.size} 首 / $page 页")
         return out
     }
+
+    /**
+     * 通用全量分页拉取。专辑 / 歌手 / 歌单列表都可能远超一页 size，只取第一页会把曲库砍到
+     * 只剩 100 张（「专辑数量明显不对」的根因）。
+     *
+     * 终止条件：
+     *  - 空页 → 结束；
+     *  - total 严格大于本页条数时才可信（pageOf 在取不到 total 时会用 list.size 兜底，
+     *    那种情况下 total == list.size，若拿它提前结束就会把列表砍到只剩第一页），可信且已拉够 → 结束；
+     *  - maxPages 兜底防服务端分页异常导致死循环。
+     * 不放宽「不满一页即结束」是因为部分服务端会忽略 size 固定每页返回较少条数。
+     */
+    private suspend fun <T> allPages(
+        pageSize: Int,
+        maxPages: Int = 200,
+        fetch: suspend (page: Int, size: Int) -> Pair<List<T>, Int>
+    ): List<T> {
+        val out = ArrayList<T>(pageSize)
+        var page = 1
+        while (page <= maxPages) {
+            val (list, total) = fetch(page, pageSize)
+            if (list.isEmpty()) break
+            out.addAll(list)
+            if (total > list.size && out.size >= total) break
+            page++
+        }
+        return out
+    }
+
+    suspend fun allAlbums(pageSize: Int = 100): List<FnosAlbum> =
+        allPages(pageSize) { p, s -> albumList(p, s) }
+            .also { CrashLogger.info("FnOS", "allAlbums 完成：${it.size} 张专辑") }
+
+    suspend fun allArtists(pageSize: Int = 100): List<FnosArtist> =
+        allPages(pageSize) { p, s -> artistList(p, s) }
+            .also { CrashLogger.info("FnOS", "allArtists 完成：${it.size} 位歌手") }
+
+    suspend fun allPlaylists(pageSize: Int = 100): List<FnosPlaylist> =
+        allPages(pageSize) { p, s -> playlistList(p, s) }
+            .also { CrashLogger.info("FnOS", "allPlaylists 完成：${it.size} 个歌单") }
+
+    suspend fun allAlbumTracks(guid: String, pageSize: Int = 200): List<FnosTrack> =
+        allPages(pageSize) { p, s -> albumTracks(guid, p, s) }
+
+    suspend fun allArtistTracks(guid: String, pageSize: Int = 200): List<FnosTrack> =
+        allPages(pageSize) { p, s -> artistTracks(guid, p, s) }
+
+    suspend fun allPlaylistTracks(guid: String, pageSize: Int = 200): List<FnosTrack> =
+        allPages(pageSize) { p, s -> playlistTracks(guid, p, s) }
 
     /**
      * 接口自检：逐个探测新版飞牛音乐可能提供的分类接口。

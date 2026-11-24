@@ -217,10 +217,11 @@ class MusicBoxApp : Application() {
     /** 背景模糊度档位：0=清晰、1=轻(6dp)、2=中(16dp)、3=重(32dp)。默认中档 2。 */
     val glassBlurLevel = MutableStateFlow(2)
     /**
-     * 列表图标玻璃质感风格：0=透明玻璃、1=磨砂玻璃、2=彩色玻璃、3=棱镜色散、4=霓虹玻璃。
-     * 默认 0（透明玻璃，最通透）。设置页可循环切换，持久化且纳入备份/恢复。
+     * 列表图标主题：七套互斥单选——0=透明玻璃、1=磨砂玻璃、2=彩色玻璃、3=棱镜色散、
+     * 4=霓虹玻璃、5=iPod单色、6=iPod彩色卡片。默认 0（透明玻璃）。
+     * 取代原先「icon_style × icon_pack」两个维度的叠加状态；持久化且纳入备份/恢复。
      */
-    val iconStyle = MutableStateFlow(0)
+    val iconTheme = MutableStateFlow(0)
     /**
      * 横屏 Cover Flow / 由其打开的专辑列表是否为「全屏沉浸」态。
      * 为 true 时 MainActivity 隐藏底部导航与 MiniPlayer，并切到沉浸式系统栏。
@@ -501,7 +502,7 @@ class MusicBoxApp : Application() {
         CrashLogger.mark("clients init start")
         runCatching {
             authRegistry = AuthRegistry()
-            okHttpClient = createOkHttpClient(authRegistry)
+            okHttpClient = createOkHttpClient(authRegistry, cacheDir)
             // 飞牛走宽松 HTTPS 客户端：信任自签证书 + 兼容旧 TLS，避免自托管/反代握手失败
             fnosClient = FnosClient(createLenientOkHttpClient(authRegistry), authRegistry)
             webDavClient = WebDavClient(okHttpClient, authRegistry)
@@ -611,8 +612,12 @@ class MusicBoxApp : Application() {
         // 液态玻璃开关 与 背景模糊度 完全独立：前者控制 backdrop 库玻璃层，后者只控制封面 .blur。
         glassBlur.value = p[T_GLASS_BLUR] ?: true
         glassBlurLevel.value = (p[T_GLASS_LEVEL] ?: 2).coerceIn(0, 3)
-        // 列表图标玻璃风格（0-4，默认透明玻璃 0）
-        iconStyle.value = (p[T_ICON_STYLE] ?: 0).coerceIn(0, 4)
+        // 列表图标主题（七套互斥，默认透明玻璃 0）。
+        // 兼容旧版「风格 × 图标包」两个 key：没有新 key 时按旧值迁移映射一次。
+        iconTheme.value = (p[T_ICON_THEME] ?: legacyIconTheme(
+            style = p[T_ICON_STYLE] ?: 0,
+            pack = p[T_ICON_PACK] ?: 0
+        )).coerceIn(0, 6)
         // 崩溃自降级保险：若上一次运行因液态玻璃库（com.kyant.backdrop）绘制崩溃而闪退，
         // 本次强制关闭玻璃并清除崩溃标志，避免反复闪退循环。只在库专属特征出现时触发，
         // 一次性降级——不写回偏好，用户可在设置页手动重新打开。
@@ -826,12 +831,12 @@ class MusicBoxApp : Application() {
         CrashLogger.info("Settings", "背景模糊度=$v")
     }
 
-    /** 列表图标玻璃质感风格（0-4）：持久化。 */
-    suspend fun setIconStyle(style: Int) {
-        val v = style.coerceIn(0, 4)
-        iconStyle.value = v
-        dataStore.edit { it[T_ICON_STYLE] = v }
-        CrashLogger.info("Settings", "图标风格=$v")
+    /** 列表图标主题（七套互斥单选，0-6）：持久化。 */
+    suspend fun setIconTheme(theme: Int) {
+        val v = theme.coerceIn(0, 6)
+        iconTheme.value = v
+        dataStore.edit { it[T_ICON_THEME] = v }
+        CrashLogger.info("Settings", "图标主题=$v")
     }
 
     // ---- 收藏三表（按音源分表）----
@@ -982,20 +987,45 @@ class MusicBoxApp : Application() {
 
     // ---- 播放状态快照：三音源通用，冷启动恢复队列 / 当前歌曲 / 播放位置 ----
 
+    /** 上一次真正落盘的队列实例：引用未变说明只是切歌/进度变，无需重写整份队列 JSON。 */
+    @Volatile private var lastSavedQueue: List<com.aipod.data.Track>? = null
+
     /**
      * 保存播放快照到 DataStore。写盘在 IO 协程里做，调用方无需切线程。
-     * 队列大（上千首）时 JSON 也才几百 KB，DataStore 增量更新(.edit)足够快。
+     * 队列实例未变（切歌 / 暂停 / seek 只改索引或进度）时跳过 PLAYBACK_QUEUE，
+     * 只更新 index/position/playing 三个小字段，避免每 4 秒重写上千首的队列 JSON。
+     * 队列真正变化（playTracks / 切源）时必定带入新实例，此时照常写整份队列。
      */
     fun savePlayback(snapshot: com.aipod.data.PlaybackSnapshot) {
+        val queueChanged = snapshot.queue !== lastSavedQueue
         appScope.launch {
             runCatching {
                 dataStore.edit { p ->
-                    p[PLAYBACK_QUEUE] = encodeTracks(snapshot.queue)
+                    if (queueChanged || p[PLAYBACK_QUEUE] == null) {
+                        p[PLAYBACK_QUEUE] = encodeTracks(snapshot.queue)
+                    }
                     p[PLAYBACK_INDEX] = snapshot.index.coerceAtLeast(0)
                     p[PLAYBACK_POSITION] = snapshot.positionMs.coerceAtLeast(0L)
                     p[PLAYBACK_PLAYING] = snapshot.playing
                 }
+                if (queueChanged) lastSavedQueue = snapshot.queue
             }.onFailure { CrashLogger.error("savePlayback", it) }
+        }
+    }
+
+    /**
+     * 只更新播放进度 / 播放态两个小字段（播放轮询专用）。
+     * 不碰 PLAYBACK_QUEUE（上千首的 JSON）——避免每 4 秒重写整份队列造成 IO 放大。
+     * 队列、索引的落盘仍由完整快照 savePlayback 负责，在切歌 / 切源 / 后台等低频事件触发。
+     */
+    fun saveProgress(positionMs: Long, playing: Boolean) {
+        appScope.launch {
+            runCatching {
+                dataStore.edit { p ->
+                    p[PLAYBACK_POSITION] = positionMs.coerceAtLeast(0L)
+                    p[PLAYBACK_PLAYING] = playing
+                }
+            }.onFailure { CrashLogger.error("saveProgress", it) }
         }
     }
 
@@ -1039,7 +1069,7 @@ class MusicBoxApp : Application() {
             put("haptic_strength", hapticStrength.value)
             put("glass_blur", glassBlur.value)
             put("glass_blur_level", glassBlurLevel.value)
-            put("icon_style", iconStyle.value)
+            put("icon_theme", iconTheme.value)
             put("favorites_webdav", encodeIds(favWebDav.value))
             put("favorites_fnos", encodeIds(favFnos.value))
             put("favorites_local", encodeIds(favLocal.value))
@@ -1100,7 +1130,15 @@ class MusicBoxApp : Application() {
         if (o.has("haptic_strength")) setHapticStrength(o.optInt("haptic_strength"))
         if (o.has("glass_blur_level")) setGlassBlurLevel(o.optInt("glass_blur_level"))
         else if (o.has("glass_blur")) setGlassBlur(o.optBoolean("glass_blur"))
-        if (o.has("icon_style")) setIconStyle(o.optInt("icon_style"))
+        if (o.has("icon_theme")) {
+            setIconTheme(o.optInt("icon_theme"))
+        } else if (o.has("icon_style") || o.has("icon_pack")) {
+            // 兼容旧备份：从「风格 × 图标包」迁移映射成七套单选主题
+            setIconTheme(legacyIconTheme(
+                style = if (o.has("icon_style")) o.optInt("icon_style") else 0,
+                pack = if (o.has("icon_pack")) o.optInt("icon_pack") else 0
+            ))
+        }
         if (o.has("favorites_webdav")) { favWebDav.value = decodeIds(o.optString("favorites_webdav")); dataStore.edit { it[FAV_WEBDAV] = encodeIds(favWebDav.value) } }
         if (o.has("favorites_fnos")) { favFnos.value = decodeIds(o.optString("favorites_fnos")); dataStore.edit { it[FAV_FNOS] = encodeIds(favFnos.value) } }
         if (o.has("favorites_local")) { favLocal.value = decodeIds(o.optString("favorites_local")); dataStore.edit { it[FAV_LOCAL] = encodeIds(favLocal.value) } }
@@ -1193,8 +1231,23 @@ private val T_HAPTIC = intPreferencesKey("haptic_strength")
 /** 液态玻璃开关（默认开）。 */
 private val T_GLASS_BLUR = booleanPreferencesKey("glass_blur")
 private val T_GLASS_LEVEL = intPreferencesKey("glass_blur_level")
-/** 列表图标玻璃质感风格（0-4）。 */
+/** 列表图标主题（七套互斥单选，0-6）。 */
+private val T_ICON_THEME = intPreferencesKey("icon_theme")
+/** 旧版图标玻璃质感 key（仅用于迁移，不再写入）。 */
 private val T_ICON_STYLE = intPreferencesKey("icon_style")
+/** 旧版图标包 key（仅用于迁移，不再写入）。 */
+private val T_ICON_PACK = intPreferencesKey("icon_pack")
+
+/**
+ * 旧版「图标风格 × 图标包」叠加状态 → 新七套单选主题的迁移映射：
+ * - 旧包 1（iPod 单色）→ 主题 5；旧包 2（iPod 彩色卡片）→ 主题 6；
+ * - 旧包 0（Material）→ 沿用旧风格 0-4（透明/磨砂/彩色/棱镜/霓虹玻璃）。
+ */
+private fun legacyIconTheme(style: Int, pack: Int): Int = when (pack.coerceIn(0, 2)) {
+    1 -> 5
+    2 -> 6
+    else -> style.coerceIn(0, 4)
+}
 /** 收藏三表：按音源分表，存 Track.id 的 JSON 数组字符串。 */
 private val FAV_WEBDAV = stringPreferencesKey("favorites_webdav")
 private val FAV_FNOS = stringPreferencesKey("favorites_fnos")

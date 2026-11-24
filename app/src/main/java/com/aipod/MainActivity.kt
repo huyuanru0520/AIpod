@@ -291,9 +291,17 @@ class MainActivity : ComponentActivity() {
         }.onFailure { CrashLogger.error("UsbAttach", it) }
     }
 
+    override fun onStart() {
+        super.onStart()
+        // 回前台：恢复各 UI 高频循环的正常帧率（播放服务不受此标志影响）。
+        com.aipod.util.AppForeground.set(true)
+    }
+
     override fun onStop() {
-        // 退到后台 / 熄屏 / 被切走时强制保存播放进度，尽量把丢失窗口压到最小。
-        // 进程被系统直接杀死时 onStop 可能来不及，但播放中的 4 秒节流落盘会兜底。
+        // 退到后台 / 熄屏 / 被切走：① 各 UI 高频循环降频省电（流光/波形/进度轮询不可见）；
+        // ② 强制保存播放进度，尽量把丢失窗口压到最小（进程被杀时 4 秒节流落盘兜底）。
+        // 注意：播放解码 / MediaSession / 前台服务不读 AppForeground，后台播放照常。
+        com.aipod.util.AppForeground.set(false)
         runCatching { PlayerController.persistOnBackground() }
         super.onStop()
     }

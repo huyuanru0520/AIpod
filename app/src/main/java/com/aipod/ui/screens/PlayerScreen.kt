@@ -3,14 +3,18 @@ package com.aipod.ui.screens
 import android.content.res.Configuration
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.clipRect
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.effects.vibrancy
 import com.kyant.backdrop.drawPlainBackdrop
 import com.kyant.backdrop.drawBackdrop
 import kotlinx.coroutines.delay
+import androidx.compose.runtime.State
 import androidx.compose.runtime.produceState
 import com.aipod.ui.components.rememberAmbientPalette
 import androidx.compose.ui.graphics.StrokeCap
@@ -493,6 +497,7 @@ fun PlayerScreen(navController: NavController) {
                                     thumbColor = BrandRed,
                                     inactiveColor = Color.White.copy(alpha = 0.22f),
                                     labelColor = Color.White.copy(alpha = 0.6f),
+                                    isPlaying = isPlaying,
                                     emphasized = progressMode,
                                     // 进度模式滚轮调进度时，用本地累积值即时驱动进度条，做到连续跟手；
                                     // 非调进度时传 null，进度条照常显示实时播放位置。
@@ -1184,6 +1189,8 @@ private fun SeekBar(
     inactiveColor: Color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.30f),
     thumbColor: Color = MaterialTheme.colorScheme.primary,
     labelColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    /** 播放状态：暂停时让波形缓慢收敛成直线。 */
+    isPlaying: Boolean = true,
     /** 进度模式：把进度标记加粗，作为「正在调进度」的就地反馈。 */
     emphasized: Boolean = false,
     /** 滚轮调进度时的本地累积位置：非 null 时优先显示它，做到逐格跟手。 */
@@ -1231,18 +1238,31 @@ private fun SeekBar(
         stretch, spring(dampingRatio = 0.5f, stiffness = 420f), label = "seekStretch"
     )
 
-    // 液体光斑的横向游走：4.8s 一个来回，只重绘这条小进度条
-    val flow by produceState(0f) {
-        var t = 0f
+    // 波形时钟：保留 State 对象本身（不用 by 解包），传给 draw 阶段读取。
+    // 关键：Slider 会把 track 隔离在子组合里，在 track 组合里读 state 无法逐帧重绘；
+    // 而在 DrawScope 的 draw lambda 里读 State.value，Compose 会追踪并在每次变化时
+    // 直接 invalidate 重绘，不依赖重组 —— 这才是高频连续动画的可靠模式。
+    val waveClock = produceState(0L) {
+        val start = android.os.SystemClock.elapsedRealtimeNanos()
         while (true) {
-            t += 0.009f
-            if (t > 1f) t -= 1f
-            value = t
-            delay(60)
+            if (com.aipod.util.AppForeground.active) {
+                value = android.os.SystemClock.elapsedRealtimeNanos() - start
+                delay(16L)
+            } else {
+                // 后台：波形不可见，低频空转；回前台首帧按墙钟算出正确相位，连续不跳变。
+                delay(1000L)
+            }
         }
     }
+    // 播放门控：用 animateFloatAsState 生成 State，暂停时 1→0、播放时 0→1，缓慢过渡。
+    // 传 State 引用给 draw 阶段读取，暂停后振幅乘以它平滑收敛到 0 → 波形变直线。
+    val playGate = animateFloatAsState(
+        targetValue = if (isPlaying || active) 1f else 0f,
+        animationSpec = tween(durationMillis = 900),
+        label = "wavePlayGate"
+    )
 
-    val trackH = if (active || emphasized) 10.dp else 7.dp
+    val trackH = if (active || emphasized) 12.dp else 9.dp
     val thumbS = if (active || emphasized) 20.dp else 16.dp
     val bufFrac = (buffered.toFloat() / maxRange).coerceIn(0f, 1f)
 
@@ -1290,18 +1310,19 @@ private fun SeekBar(
                 val frac = if (range.endInclusive > range.start)
                     ((state.value - range.start) / (range.endInclusive - range.start)).coerceIn(0f, 1f)
                 else 0f
-                Box(
-                    Modifier.liquidTrackModifier(
-                        backdrop = LocalGlassBackdrop.current,
-                        shape = RoundedCornerShape(percent = 50),
-                        frac = frac,
-                        bufFrac = bufFrac,
-                        accent = accent,
-                        glass = glass,
-                        active = active,
-                        flow = flow,
-                        height = trackH
-                    )
+                // 彩色波浪律动轨道：暖色已播放 / 冷色未播放，正弦起伏随时间流动，
+                // 振幅由 WaveAmplitude 驱动（模拟，预留真实 FFT 接口）。背景模糊仍走 backdrop。
+                WaveSeekTrack(
+                    clock = waveClock,
+                    playGate = playGate,
+                    backdrop = LocalGlassBackdrop.current,
+                    frac = frac,
+                    bufFrac = bufFrac,
+                    palette = palette,
+                    accent = accent,
+                    glass = glass,
+                    active = active,
+                    height = trackH
                 )
             }
         )
@@ -1310,6 +1331,186 @@ private fun SeekBar(
             Text(formatDuration(duration), style = MaterialTheme.typography.bodySmall, color = labelColor)
         }
     }
+}
+
+/**
+ * 波形进度轨道：相位与振幅都按**真实时间**连续计算，由外层 waveClock 驱动重绘。
+ *
+ * 关键：本组件不持有动画 state，也不在这里起帧循环——Slider 会高频重组其 track 内容，
+ * 任何在 track 子级 remember 的循环都会被反复 dispose、导致波形卡死在初始帧。
+ * 所以时钟放在 Slider 外层的 produceState 里，本组件只做纯函数式换算：
+ * - 相位 = 真实经过秒数 × 速度，连续不跳帧；
+ * - 振幅 = 真实 PCM 能量（数据层已阻尼），无数据时自动回落模拟兜底。
+ */
+@Composable
+private fun WaveSeekTrack(
+    clock: androidx.compose.runtime.State<Long>,
+    playGate: androidx.compose.runtime.State<Float>,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop?,
+    frac: Float,
+    bufFrac: Float,
+    palette: com.aipod.ui.components.AmbientPalette,
+    accent: Color,
+    glass: Color,
+    active: Boolean,
+    height: Dp
+) {
+    // 只把 State 引用传下去；真正的相位/振幅/门控在 draw lambda 里实时读。
+    // 这样 state 读取发生在 DrawScope，值一变直接 invalidate 重绘，绕开 Slider 子组合隔离。
+    Box(
+        Modifier.waveTrackModifier(
+            backdrop = backdrop,
+            frac = frac,
+            bufFrac = bufFrac,
+            palette = palette,
+            accent = accent,
+            glass = glass,
+            active = active,
+            clock = clock,
+            playGate = playGate,
+            height = height
+        )
+    )
+}
+
+/**
+ * 彩色波浪律动轨道。
+ *
+ * 一条平滑正弦丝带贯穿整条轨道：左段（已播放）暖色渐变（粉→橙），右段（未播放）冷色渐变（青→白），
+ * 交界处按 frac 裁剪。底层加粗低透明 + 顶层细亮线模拟霓虹外发光；相位随时间递增产生向前流动。
+ * 振幅 [amplitude] 0..1 控制起伏幅度（数据层平滑后传入），[phase] 控制波浪位移。
+ */
+private fun DrawScope.drawWaveTrack(
+    frac: Float,
+    bufFrac: Float,
+    palette: com.aipod.ui.components.AmbientPalette,
+    accent: Color,
+    glass: Color,
+    active: Boolean,
+    phase: Float,
+    amplitude: Float
+) {
+    val w = size.width
+    val h = size.height
+    val cy = h / 2f
+    // 起伏幅度：随振幅缩放（观赏性增益后 amplitude 更高，这里系数也略放大）
+    val amp = (h * 0.34f) * amplitude.coerceIn(0.08f, 1f)
+    // 波长：整条轨道约 2.7 个波，波动感更强、更有观赏性
+    val omega = (2f * Math.PI * 2.7f / w).toFloat()
+    val steps = (w / 3f).toInt().coerceAtLeast(8)
+
+    fun wavePath(startX: Float, endX: Float): Path {
+        val p = Path()
+        var first = true
+        var x = startX
+        while (x <= endX) {
+            val y = cy + kotlin.math.sin(x * omega - phase) * amp
+            if (first) { p.moveTo(x, y); first = false } else p.lineTo(x, y)
+            x += 3f
+        }
+        // 补上末端，保证裁剪边界不留缝
+        val yEnd = cy + kotlin.math.sin(endX * omega - phase) * amp
+        p.lineTo(endX, yEnd)
+        return p
+    }
+
+    // 一帧只算一次路径，下面 5 层绘制复用（原来重复算 5 遍，白耗 5 倍逐点 sin 计算）
+    val ribbonPath = wavePath(0f, w)
+
+    // 颜色跟随背景（封面取色）：已播放段用 accent/accent2/primary 的暖亮渐变，
+    // 未播放段用 secondary/primary 的冷暗渐变。切歌换封面时整条进度条配色跟着变。
+    val warmBase = palette.accent
+    val warm = listOf(
+        lerp(warmBase, Color.White, 0.28f),
+        lerp(palette.accent2, warmBase, 0.45f),
+        palette.primary
+    )
+    val coolBase = palette.secondary
+    val cool = listOf(
+        lerp(coolBase, Color.White, 0.34f),
+        lerp(palette.primary, Color.White, 0.16f),
+        glass.copy(alpha = 0.55f)
+    )
+    val progressX = (w * frac.coerceIn(0f, 1f))
+
+    // —— 底层外发光：加粗、低透明、圆头 ——
+    val glowW = if (active) h * 0.55f else h * 0.48f
+    // 未播放（整条冷底光）
+    drawPath(
+        wavePath(0f, w),
+        brush = Brush.horizontalGradient(cool, startX = 0f, endX = w),
+        style = Stroke(width = glowW, cap = StrokeCap.Round, join = StrokeJoin.Round),
+        alpha = 0.28f
+    )
+    // 已播放段（暖底光，裁剪到进度）
+    clipRect(0f, 0f, progressX, h) {
+        drawPath(
+            ribbonPath,
+            brush = Brush.horizontalGradient(warm, startX = 0f, endX = w),
+            style = Stroke(width = glowW, cap = StrokeCap.Round, join = StrokeJoin.Round),
+            alpha = 0.42f
+        )
+    }
+
+    // —— 顶层细亮线：清晰的丝带主体 ——
+    val coreW = if (active) 3.2f else 2.6f
+    drawPath(
+        wavePath(0f, w),
+        brush = Brush.horizontalGradient(cool, startX = 0f, endX = w),
+        style = Stroke(width = coreW, cap = StrokeCap.Round, join = StrokeJoin.Round)
+    )
+    clipRect(0f, 0f, progressX, h) {
+        drawPath(
+            ribbonPath,
+            brush = Brush.horizontalGradient(warm, startX = 0f, endX = w),
+            style = Stroke(width = coreW, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+    }
+
+    // —— 中心线高光：极细白线，营造玻璃/霓虹芯 ——
+    clipRect(0f, 0f, progressX, h) {
+        drawPath(
+            ribbonPath,
+            brush = Brush.horizontalGradient(
+                listOf(Color.Transparent, Color.White.copy(alpha = 0.85f), Color.White.copy(alpha = 0.5f)),
+                startX = 0f, endX = w
+            ),
+            style = Stroke(width = 0.9f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+    }
+}
+
+/** 给波浪轨道挂真实背景模糊（只 blur 不 lens），返回已绘制波形丝带的 Modifier。 */
+private fun Modifier.waveTrackModifier(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop?,
+    frac: Float,
+    bufFrac: Float,
+    palette: com.aipod.ui.components.AmbientPalette,
+    accent: Color,
+    glass: Color,
+    active: Boolean,
+    clock: androidx.compose.runtime.State<Long>,
+    playGate: androidx.compose.runtime.State<Float>,
+    height: Dp
+): Modifier {
+    val base = this.fillMaxWidth().height(height)
+    val drawWave: DrawScope.() -> Unit = {
+        // ★ 在原生 draw 阶段读时钟：Compose 追踪此处 State 读取，值变化直接触发重绘。
+        //   放在独立 drawBehind 层（而非 backdrop 的 onDrawSurface），避免库内部缓存导致不重绘。
+        val elapsedSec = clock.value / 1_000_000_000f
+        val phase = elapsedSec * 5.0f
+        // 振幅 = 律动目标 × 播放门控；暂停时门控平滑→0，波形缓慢收敛成直线
+        val amplitude = com.aipod.ui.components.WaveAmplitude.targetAt(elapsedSec) * playGate.value
+        drawWaveTrack(frac, bufFrac, palette, accent, glass, active, phase, amplitude)
+    }
+    // 背景模糊单独一层、不依赖时钟；波形画在它上面的独立层，逐帧重绘互不干扰。
+    val withBackdrop = if (backdrop == null) base else base.drawPlainBackdrop(
+        backdrop = backdrop,
+        shape = { RoundedCornerShape(percent = 50) },
+        effects = { blur(4f.dp.toPx()) },
+        onDrawSurface = {}
+    )
+    return withBackdrop.drawBehind(drawWave)
 }
 
 /**
@@ -1441,7 +1642,8 @@ private fun GlassThumb(
                 }
             },
             onDrawSurface = {
-                // 极淡强调色膜（Screen 不改色相），让玻璃珠与轨道 Fill 颜色连贯
+                // 极淡强调色膜（Screen 不改色相），让玻璃珠与轨道 Fill 颜色连贯，
+                // 背景色从 backdrop 采样透出，这里只留一丝色相不遮住背景
                 drawCircle(tint.copy(alpha = 0.05f), blendMode = BlendMode.Screen)
             }
         )
@@ -1457,18 +1659,20 @@ private fun Modifier.liquidTrackModifier(
     accent: Color,
     glass: Color,
     active: Boolean,
-    flow: Float,
+    flow: State<Float>,
     height: Dp
 ): Modifier {
     val base = this.fillMaxWidth().height(height)
+    // flow 传 State 引用，在 draw lambda 里读 value：流光每 60ms 变化时只 invalidate 重绘，
+    // 不再让整个 VolumeBar 组合（原来 `by` 解包后每帧触发整条重组）。
     if (backdrop == null) {
-        return base.drawBehind { drawLiquidTrack(frac, bufFrac, accent, glass, active, flow) }
+        return base.drawBehind { drawLiquidTrack(frac, bufFrac, accent, glass, active, flow.value) }
     }
     return base.drawPlainBackdrop(
         backdrop = backdrop,
         shape = { shape },
         effects = { blur(4f.dp.toPx()) },
-        onDrawSurface = { drawLiquidTrack(frac, bufFrac, accent, glass, active, flow) }
+        onDrawSurface = { drawLiquidTrack(frac, bufFrac, accent, glass, active, flow.value) }
     )
 }
 
@@ -1513,14 +1717,21 @@ private fun VolumeBar(volume: Float) {
     val palette = rememberAmbientPalette(cover, BrandRed, coverKey)
     val accent = contrastingAccent(palette.primary, palette.base)
     val glass = if (luma(palette.base) > 0.45f) Color.Black else Color.White
-    // 与进度条一致的缓慢流光，只重绘这一小条
-    val flow by produceState(0f) {
+    // 与进度条一致的缓慢流光，只重绘这一小条。
+    // 保留 State 引用（不用 by 解包），交给 liquidTrackModifier 在 draw 阶段读 value，
+    // 避免流光每 60ms 触发整条 VolumeBar 重组。
+    val flow = produceState(0f) {
         var t = 0f
         while (true) {
-            t += 0.009f
-            if (t > 1f) t -= 1f
-            value = t
-            delay(60)
+            if (com.aipod.util.AppForeground.active) {
+                t += 0.009f
+                if (t > 1f) t -= 1f
+                value = t
+                delay(60)
+            } else {
+                // 后台：音量条流光不可见，低频空转。
+                delay(1000)
+            }
         }
     }
 

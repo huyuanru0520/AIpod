@@ -243,8 +243,26 @@ object PlayerHolder {
 
         val dataSourceFactory = dataSourceFactory(context, app)
 
-        val renderersFactory = DefaultRenderersFactory(context)
-            .setEnableDecoderFallback(true)
+        // 注入 TeeAudioProcessor：把解码后的 PCM 原样分流一份给波形律动读取。
+        // Tee 只给只读副本、随后把原始字节原样拷回输出，不改采样、不影响音质、不需要录音权限。
+        val renderersFactory = object : DefaultRenderersFactory(context) {
+            override fun buildAudioSink(
+                ctx: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean
+            ): AudioSink {
+                return DefaultAudioSink.Builder(ctx)
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .setAudioCapabilities(
+                        androidx.media3.exoplayer.audio.AudioCapabilities.getCapabilities(ctx)
+                    )
+                    .setAudioProcessors(
+                        arrayOf(com.aipod.player.AudioEnergyProbe.newProcessor())
+                    )
+                    .build()
+            }
+        }.setEnableDecoderFallback(true)
             .setExtensionRendererMode(extensionMode)
 
         // 无损音频码率高且来自网络：保留够用的缓冲防止卡顿，但不再攒到 60s。
