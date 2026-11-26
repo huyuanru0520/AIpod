@@ -7,45 +7,19 @@ import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.colorControls
 import com.kyant.backdrop.effects.lens
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
+import com.kyant.backdrop.highlight.Highlight
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.compositionLocalOf
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -59,16 +33,9 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.aipod.player.PlayerController
-import com.aipod.ui.theme.BrandRed
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.PI
@@ -87,20 +54,88 @@ import kotlin.math.sin
  *
  * 注：背景已从「模糊封面」改为「封面取色 + 动态流光」，组件不再需要模糊半径参数。
  */
+/**
+ * 亮面玻璃三档预设（照 demo：A Aura同款 / B 更亮 / C 极透）。
+ *
+ * 三档只在三个参数上不同，背景采样管线完全相同：
+ *  - [blurDp]          backdrop 模糊半径（越低背景越清晰）
+ *  - [tintAlpha]       表面极淡黑膜 alpha（越低越通透）
+ *  - [highlightAlpha]  45° 轮廓高光强度（Plus 混合，只勾边缘、盘心零绘制）
+ */
+data class GlassTierSpec(
+    val blurDp: Float,
+    val tintAlpha: Float,
+    val highlightAlpha: Float,
+    /** 高光线宽 dp：决定「釉面亮边」的粗细，是三档最直观的差异。 */
+    val highlightWidthDp: Float,
+    /** 高光模糊半径 dp：越大越像柔和的亮面釉光。 */
+    val highlightBlurDp: Float,
+    /** 自绘光影强度倍率：A 玻璃感重=1，C 极透=0.25（削弱自绘、让背景透出）。 */
+    val surfaceScale: Float = 1f,
+    /** 是否启用 backdrop 真采样。false = 关闭真玻璃，走轻量兜底（省电）。 */
+    val backdropEnabled: Boolean = true
+)
+
+/**
+ * 亮面玻璃四档：0=A 厚玻璃、1=B 亮面、2=C 极透、3=关闭（省电）。
+ * 差异刻意拉大——参数太接近时真机上肉眼分辨不出，等于没生效。
+ */
+object GlassTiers {
+    const val COUNT = 4
+    const val OFF = 3
+    private val SPECS = listOf(
+        // A 厚玻璃：背景柔化、细亮边，玻璃感最重
+        GlassTierSpec(10f, 0.10f, 0.75f, 0.5f, 0f, 1.00f),
+        // B 亮面：宽而亮的釉面高光、背景仍清晰（最接近「潜规则」）
+        GlassTierSpec(4f, 0.04f, 1.20f, 1.6f, 0.8f, 0.70f),
+        // C 极透：零模糊零色膜，背景全透、只剩极细高光勾边
+        GlassTierSpec(0f, 0.00f, 0.90f, 0.4f, 0f, 0.25f),
+        // 关闭：不采样 backdrop，走 Canvas 兜底观感，功耗最低
+        GlassTierSpec(0f, 0f, 0f, 0f, 0f, 0f, backdropEnabled = false)
+    )
+    fun spec(tier: Int): GlassTierSpec = SPECS[tier.coerceIn(0, COUNT - 1)]
+    fun label(tier: Int): String = when (tier.coerceIn(0, COUNT - 1)) {
+        0 -> "A · 厚玻璃"
+        1 -> "B · 亮面"
+        2 -> "C · 极透"
+        else -> "关闭 · 省电"
+    }
+    fun summary(tier: Int): String = when (tier.coerceIn(0, COUNT - 1)) {
+        0 -> "柔化背景 + 细亮边，玻璃感最重"
+        1 -> "宽亮釉面 + 背景清晰（潜规则同款）"
+        2 -> "零模糊零色膜，背景全透"
+        else -> "不采样背景，走轻量兜底，功耗最低"
+    }
+}
+
+/** 按档位参数构造高光（width/blurRadius/alpha 都随档位变化）。 */
+fun GlassTierSpec.highlight(alphaScale: Float = 1f) = Highlight.Default.copy(
+    width = highlightWidthDp.dp,
+    blurRadius = highlightBlurDp.dp,
+    alpha = (highlightAlpha * alphaScale).coerceAtMost(2f)
+)
+
 data class GlassBlurConfig(
     val enabled: Boolean,
     val intensity: Float,
-    val backdropLevel: Int = 2
+    val backdropLevel: Int = 2,
+    /** 亮面玻璃档位 0~2（Aura同款 / 更亮 / 极透）。 */
+    val tier: Int = 0
 ) {
+    /** 当前档位的模糊/色膜/高光参数。 */
+    val tierSpec: GlassTierSpec get() = GlassTiers.spec(tier)
+
     companion object {
         /**
          * @param glassOn 液态玻璃开关
          * @param backdropLevel 背景档位 0~3：清透 / 柔和 / 均衡 / 浓郁
+         * @param tier 亮面玻璃档位 0~2
          */
-        fun of(glassOn: Boolean, backdropLevel: Int): GlassBlurConfig = GlassBlurConfig(
+        fun of(glassOn: Boolean, backdropLevel: Int, tier: Int = 0): GlassBlurConfig = GlassBlurConfig(
             enabled = glassOn,
             intensity = if (glassOn) 1f else 0f,
-            backdropLevel = backdropLevel.coerceIn(0, 3)
+            backdropLevel = backdropLevel.coerceIn(0, 3),
+            tier = tier.coerceIn(0, GlassTiers.COUNT - 1)
         )
     }
 }
@@ -405,10 +440,12 @@ fun GlassSurface(
     content: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit
 ) {
     val cfg = LocalGlassBlurConfig.current
+    val spec = cfg.tierSpec
     val intensity = if (cfg.enabled) cfg.intensity * (if (blur) 1f else 0.85f) else 0f
     val backdrop = LocalGlassBackdrop.current
-    // 真玻璃：滚轮 + 有 backdrop + 开关开启 → 用 backdrop 库采样折射背景。
-    val useBackdrop = circular && intensity > 0f && backdrop != null
+    // 真玻璃：滚轮 + 有 backdrop + 开关开启 + 档位未关闭 → 用 backdrop 库采样折射背景。
+    // 关闭档（spec.backdropEnabled=false）走下面的 Canvas 兜底，零 backdrop 采样开销。
+    val useBackdrop = circular && intensity > 0f && backdrop != null && spec.backdropEnabled
 
     Box(
         if (useBackdrop) {
@@ -423,8 +460,8 @@ fun GlassSurface(
                 effects = {
                     // 温和提饱和，不用 vibrancy（固定 1.5×，发油发灰）；纯 ColorMatrix，安全。
                     colorControls(saturation = 1.3f)
-                    // 半径单位是 px，用 dp.toPx() 与屏幕密度无关；4dp 远小于磨砂版 8dp。
-                    blur(4f.dp.toPx())
+                    // 亮面玻璃三档模糊：A 10dp 柔化 / B 4dp 清晰 / C 0dp 全透。
+                    blur(spec.blurDp.dp.toPx())
                     // 与 5.0.5 已验证可透出背景的参数一致，仅开色散、不开 depthEffect。
                     lens(
                         refractionHeight = 12f.dp.toPx(),
@@ -432,10 +469,14 @@ fun GlassSurface(
                         chromaticAberration = true
                     )
                 },
+                // 亮面玻璃三档高光：width/blurRadius/alpha 随档位变化，切档一眼可见。
+                highlight = { spec.highlight(alphaScale = intensity) },
                 // 厚度暗示：仅左上角一抹对角微光，55% 处归零、盘心完全透明。
                 // ★ 绝不做整盘白渐变填充——那正是「磨砂不透明」的成因。这里 alpha≤0.07、
                 // 普通混合（非 Plus），只让玻璃左上有一点厚薄不均的光泽，背景依然清晰透出。
                 onDrawSurface = {
+                    // 三档色膜：A .10 / B .04 / C 0，越低越通透。
+                    if (spec.tintAlpha > 0f) drawRect(Color.Black.copy(alpha = spec.tintAlpha * intensity))
                     drawRect(
                         brush = Brush.linearGradient(
                             colorStops = arrayOf(
@@ -470,192 +511,5 @@ fun GlassSurface(
         // 把整盘提亮成白雾（v5.1.0 纯白盘的第二元凶）。边缘立体感完全交给库默认 highlight，
         // 它只在轮廓 0.5dp 内画高光，中心零绘制，保持背景真实透出。
         content()
-    }
-}
-
-/** 悬浮 Dock 的一项。 */
-data class DockItem(val route: String, val label: String, val icon: ImageVector)
-
-/**
- * 悬浮玻璃 Dock：胶囊形，浮在内容之上，选中项用一个滑动的「药丸」高亮。
- *
- * 交互参照 iOS 26：整体是一个整体容器，高亮块随选中项平滑移动；
- * 点击才有导航行为，滑动不会误触发页面切换。
- */
-@Composable
-fun LiquidGlassDock(
-    selected: Int,
-    items: List<DockItem>,
-    onSelect: (Int) -> Unit,
-    modifier: Modifier = Modifier,
-    /** 强调色：默认苹果音乐红，让二级页 Dock 与红色主界面呼应；不传则跟随主题主色。 */
-    accent: Color = BrandRed
-) {
-    val colors = MaterialTheme.colorScheme
-    val dark = colors.background.luminance() < 0.5f
-    GlassSurface(
-        modifier = modifier.height(64.dp),
-        shape = RoundedCornerShape(percent = 50),
-        tint = if (dark) colors.surfaceContainerHighest else colors.surface,
-        tintAlpha = if (dark) 0.72f else 0.78f,
-        elevation = 24.dp,
-        blur = true
-    ) {
-        BoxWithConstraints(Modifier.fillMaxSize().padding(6.dp)) {
-            val itemWidth = maxWidth / items.size
-            val highlightOffset by animateDpAsState(
-                targetValue = itemWidth * selected,
-                animationSpec = spring(dampingRatio = 0.78f, stiffness = 520f),
-                label = "dockHighlight"
-            )
-            // 选中高亮：主色淡染 + 一圈更亮的边，像玻璃下压着一片彩色
-            Box(
-                Modifier
-                    .offset(x = highlightOffset)
-                    .width(itemWidth)
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(percent = 50))
-                    .background(accent.copy(alpha = if (dark) 0.24f else 0.16f))
-                    .border(
-                        width = 1.dp,
-                        color = accent.copy(alpha = 0.40f),
-                        shape = RoundedCornerShape(percent = 50)
-                    )
-            )
-            Row(Modifier.fillMaxSize()) {
-                items.forEachIndexed { index, item ->
-                    val active = index == selected
-                    val scale by animateFloatAsState(
-                        targetValue = if (active) 1f else 0.96f,
-                        animationSpec = spring(dampingRatio = 0.7f, stiffness = 600f),
-                        label = "dockItem"
-                    )
-                    Column(
-                        modifier = Modifier
-                            .width(itemWidth)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(percent = 50))
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) { onSelect(index) }
-                            .scale(scale),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            item.icon,
-                            contentDescription = item.label,
-                            tint = if (active) accent else colors.onSurfaceVariant,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            item.label,
-                            fontSize = 10.sp,
-                            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (active) accent else colors.onSurfaceVariant,
-                            maxLines = 1
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * 玻璃迷你播放器：浮在 Dock 上方的一张独立卡片，底部有一条播放进度线。
- * 点击整卡进入播放页，右侧按钮直接控制播放/暂停与下一首。
- */
-@Composable
-fun GlassMiniPlayer(
-    title: String,
-    artist: String,
-    coverUrl: String?,
-    embeddedAudioUrl: String?,
-    isPlaying: Boolean,
-    progress: Float,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val colors = MaterialTheme.colorScheme
-    val dark = colors.background.luminance() < 0.5f
-    GlassSurface(
-        modifier = modifier.height(62.dp).clickable(onClick = onClick),
-        shape = RoundedCornerShape(22.dp),
-        tint = if (dark) colors.surfaceContainerHighest else colors.surface,
-        tintAlpha = if (dark) 0.74f else 0.82f,
-        elevation = 18.dp,
-        blur = true
-    ) {
-        Row(
-            Modifier.fillMaxSize().padding(start = 8.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            CoverImage(
-                coverUrl,
-                Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)),
-                embeddedAudioUrl = embeddedAudioUrl
-            )
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    artist.ifBlank { "未知歌手" },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Icon(
-                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (isPlaying) "暂停" else "播放",
-                tint = colors.onSurface,
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { if (isPlaying) PlayerController.pause() else PlayerController.play() }
-                    .padding(10.dp)
-                    .size(24.dp)
-            )
-            Icon(
-                Icons.Default.SkipNext,
-                contentDescription = "下一首",
-                tint = colors.onSurface,
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { PlayerController.next() }
-                    .padding(8.dp)
-                    .size(22.dp)
-            )
-        }
-        // 进度线贴在卡片底部，颜色用主题主色
-        Box(
-            Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth()
-                .height(2.dp)
-                .background(colors.onSurface.copy(alpha = 0.08f))
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth(progress.coerceIn(0f, 1f))
-                    .fillMaxSize()
-                    .background(BrandRed)
-            )
-        }
     }
 }

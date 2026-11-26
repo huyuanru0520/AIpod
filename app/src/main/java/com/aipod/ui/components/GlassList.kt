@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.effects.vibrancy
 
@@ -43,6 +44,7 @@ fun Modifier.glassHighlight(
     tint: Color = Color.White
 ): Modifier {
     val cfg = LocalGlassBlurConfig.current
+    val spec = cfg.tierSpec
     val intensity = if (cfg.enabled) cfg.intensity else 0f
     val backdrop = LocalGlassBackdrop.current
 
@@ -56,16 +58,20 @@ fun Modifier.glassHighlight(
     //   2) `drawRect(White alpha 0.10)` 是 srcOver 覆盖，白 alpha 会把彩色背景冲淡成灰雾。
     //   现在只保留边缘 lens 折射 + 色散，中心 100% 透出背景原色；提亮改用 Screen 混合
     //   （只抬亮度、不改色相），一眼看过去是"一块透明玻璃片"，而不是"一层灰白膜"。
-    if (backdrop != null) {
+    if (backdrop != null && spec.backdropEnabled) {
         return this.drawBackdrop(
             backdrop = backdrop,
             shape = { shape },
             effects = {
-                // 参考 GlassSurface：vibrancy 提亮提饱和，让背景色更鲜活地透过玻璃（不模糊、不加色）。
+                // 参考 GlassSurface：vibrancy 提亮提饱和，让背景色更鲜活地透过玻璃。
                 vibrancy()
+                // 亮面玻璃三档模糊（照 demo：A 12dp / B 8dp / C 6dp）。
+                blur(spec.blurDp.dp.toPx())
                 // lens 高度受限于列表项最小圆角半径（12~14dp，取 6dp）。
                 lens(6f.dp.toPx(), 12f.dp.toPx(), chromaticAberration = true)
             },
+            // 亮面玻璃三档（设置页可调）：width/blurRadius/alpha 随档位变化。
+            highlight = { spec.highlight(alphaScale = intensity) },
             onDrawSurface = {
                 // 整体轻微提亮：Screen 不改色相，背景依旧鲜艳地透出来
                 drawRect(tint.copy(alpha = 0.07f), blendMode = BlendMode.Screen)

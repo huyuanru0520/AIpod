@@ -14,8 +14,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -34,8 +32,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,9 +46,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -61,9 +55,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.aipod.player.PlayerController
-import com.aipod.ui.components.DockItem
-import com.aipod.ui.components.GlassMiniPlayer
-import com.aipod.ui.components.LiquidGlassDock
 import com.aipod.ui.screens.LibraryScreen
 import com.aipod.ui.screens.PlayerScreen
 import com.aipod.ui.screens.WheelSettingsScreen
@@ -454,7 +445,8 @@ private fun AppRoot() {
     // 折射效果在低版本 Android 上由库自动降级，不会崩。
     val glassBlur by MusicBoxApp.instance.glassBlur.collectAsState()
     val glassBlurLevel by MusicBoxApp.instance.glassBlurLevel.collectAsState()
-    val blurCfg = com.aipod.ui.components.GlassBlurConfig.of(glassBlur, glassBlurLevel)
+    val glassTier by MusicBoxApp.instance.glassTier.collectAsState()
+    val blurCfg = com.aipod.ui.components.GlassBlurConfig.of(glassBlur, glassBlurLevel, glassTier)
     MusicBoxTheme(darkTheme = dark, accent = androidx.compose.ui.graphics.Color(0xFF000000.toInt() or accentArgb)) {
         // 系统栏现在由 Activity 统一接管：竖屏全部「透明栏 + 白图标 + 常驻」，横屏整屏隐藏。
         // 这里绝不能再调用 SystemBarColors——它会把栏刷成不透明主题背景色（浅色=白），
@@ -464,12 +456,8 @@ private fun AppRoot() {
         // 内容 full-bleed 铺满整屏，状态栏 / 导航栏区域透出的就是各页面自己画的
         // 红色光晕或模糊封面背景（背景色一致），安全区 paddings 下移到各页面内部处理。
         val rootBg = androidx.compose.ui.graphics.Color.Black
-        // library 首页与 settings 设置页都是纯 iPod 模拟器：滚轮上方那一块就是屏幕，
-        // 没有 Dock、没有「正在播放」横条，唯一交互是转轮，因此这两页都不显示外壳。
-        // 歌单页已砍掉，播放页全屏沉浸。当前所有路由都不需要底部 Dock。
-        val shellVisible = false && !onPlayer && !fullScreen
-        var shellHeight by remember { mutableStateOf(0.dp) }
-        val density = LocalDensity.current
+        // 底部 Dock / 迷你播放器已下线：首页、设置页是纯 iPod 模拟器（滚轮 + 屏幕），
+        // 播放页全屏沉浸，所有路由都不再需要底部外壳。
 
         val rootModifier = Modifier.fillMaxSize().background(rootBg)
         // 液态玻璃总开关下发；每页自行创建 backdrop 采样源（见各页面 rememberGlassBackdrop）。
@@ -503,20 +491,6 @@ private fun AppRoot() {
             // 收进独立组件：错误、队列、当前曲目的订阅都只让这一小块重组，
             // 不再牵动整个 AppRoot（含 NavHost）跟着重组。
             if (!onPlayer) PlayErrorBanner()
-
-            // 底部留白 = 悬浮外壳的实测高度，最后一项才不会被遮住
-            if (shellVisible) Spacer(Modifier.height(shellHeight))
-        }
-
-        if (shellVisible) {
-            Box(
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .onSizeChanged { shellHeight = with(density) { it.height.toDp() } }
-            ) {
-                ShellBottom(navController, route)
-            }
         }
         }
         } // CompositionLocalProvider(LocalGlassBlurConfig)
@@ -651,72 +625,6 @@ private fun DiagnosticsScreen(
             log,
             fontFamily = FontFamily.Monospace,
             style = MaterialTheme.typography.bodySmall
-        )
-    }
-}
-
-/**
- * 底部悬浮外壳：玻璃迷你播放器 + 液态玻璃 Dock。
- *
- * 只在这里订阅播放状态（队列 / 播放中 / 进度）：外面的 NavHost 不会因为进度变化重组。
- */
-@Composable
-private fun ShellBottom(navController: NavController, route: String?) {
-    val queue by PlayerController.queue.collectAsState()
-    val idx by PlayerController.currentIndex.collectAsState()
-    val isPlaying by PlayerController.isPlaying.collectAsState()
-    val position by PlayerController.position.collectAsState()
-    val duration by PlayerController.duration.collectAsState()
-    val current = if (idx in queue.indices) queue[idx] else null
-    val progress = if (duration > 0L) position.toFloat() / duration.toFloat() else 0f
-
-    val items = listOf(
-        DockItem("library", "曲库", Icons.Default.LibraryMusic),
-        DockItem("settings", "设置", Icons.Default.Settings)
-    )
-
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .padding(top = 8.dp, bottom = 10.dp)
-    ) {
-        AnimatedVisibility(
-            visible = current != null,
-            enter = slideInVertically(tween(240)) { it / 2 } + fadeIn(tween(180)),
-            exit = slideOutVertically(tween(200)) { it / 2 } + fadeOut(tween(140))
-        ) {
-            val c = current
-            if (c != null) {
-                Column {
-                    GlassMiniPlayer(
-                        title = c.title,
-                        artist = c.artist,
-                        coverUrl = c.coverUrl,
-                        embeddedAudioUrl = c.embeddedAudioUrl,
-                        isPlaying = isPlaying,
-                        progress = progress,
-                        onClick = { navController.navigate("player") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(10.dp))
-                }
-            }
-        }
-        LiquidGlassDock(
-            selected = items.indexOfFirst { it.route == route }.coerceAtLeast(0),
-            items = items,
-            onSelect = { index ->
-                val r = items[index].route
-                if (r != route) {
-                    navController.navigate(r) {
-                        popUpTo("library") { saveState = true }
-                        launchSingleTop = true
-                        restoreState = true
-                    }
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
         )
     }
 }

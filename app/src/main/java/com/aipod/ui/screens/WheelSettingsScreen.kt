@@ -28,6 +28,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.BugReport
@@ -93,6 +94,7 @@ import com.aipod.ui.components.fadeInList
 import com.aipod.ui.components.glassHighlight
 import com.aipod.ui.components.ThemedIcon
 import com.aipod.ui.components.IconTheme
+import com.aipod.ui.components.GlassTiers
 import com.aipod.ui.components.rememberGlassBackdrop
 import com.aipod.ui.components.LocalGlassBackdrop
 import com.aipod.ui.components.AmbientMeshBackground
@@ -128,6 +130,7 @@ fun WheelSettingsScreen(navController: NavController) {
     val reflectionTilt by app.reflectionTilt.collectAsState()
     val hapticStrength by app.hapticStrength.collectAsState()
     val glassBlurLevel by app.glassBlurLevel.collectAsState()
+    val glassTier by app.glassTier.collectAsState()
     val iconTheme by app.iconTheme.collectAsState()
     val webDav by app.webDavConn.collectAsState()
     val fnos by app.fnosConn.collectAsState()
@@ -240,7 +243,7 @@ fun WheelSettingsScreen(navController: NavController) {
     // 构建当前页条目
     val items: List<SettingItem> = when (node) {
         SettingsNode.Root ->         buildRootSettings(
-            sourceMode, audioQuality, usbExclusive, usbHighGain, scanPace, hapticStrength, glassBlurLevel, debugMode, showDescriptions, reflectionTilt, iconTheme,
+            sourceMode, audioQuality, usbExclusive, usbHighGain, scanPace, hapticStrength, glassBlurLevel, glassTier, debugMode, showDescriptions, reflectionTilt, iconTheme,
             webDav, fnos, webDavScanning, coverCacheSize, transcodeSize, localCount, localScanning, localScanProgress,
             !localFolderUri.isNullOrBlank()
         )
@@ -300,6 +303,11 @@ fun WheelSettingsScreen(navController: NavController) {
                     val next = (iconTheme + 1) % IconTheme.COUNT
                     app.setIconTheme(next)
                     statusLine = "图标主题 ${next + 1}/${IconTheme.COUNT}：${IconTheme.label(next)}"
+                }
+                "glasstier" -> scope.launch {
+                    val next = (glassTier + 1) % GlassTiers.COUNT
+                    app.setGlassTier(next)
+                    statusLine = "亮面玻璃 ${GlassTiers.label(next)}：${GlassTiers.summary(next)}"
                 }
             }
             is SettingItem.Toggle -> when (item.key) {
@@ -604,7 +612,7 @@ private fun SettingItem.subtitle(): String = when (this) {
 
 private fun buildRootSettings(
     source: SourceMode, quality: AudioQuality, usbExclusive: Boolean, usbHighGain: Boolean,
-    scanPace: Long, haptic: Int, backdropLevel: Int, debug: Boolean, showDescriptions: Boolean, reflectionTilt: Boolean, iconTheme: Int, webDav: Any?, fnos: Any?, scanning: Boolean,
+    scanPace: Long, haptic: Int, backdropLevel: Int, glassTier: Int, debug: Boolean, showDescriptions: Boolean, reflectionTilt: Boolean, iconTheme: Int, webDav: Any?, fnos: Any?, scanning: Boolean,
     coverSize: Long, transcodeSize: Long, localCount: Int, localScanning: Boolean, localScanProgress: String,
     hasLocalFolder: Boolean
 ): List<SettingItem> {
@@ -645,6 +653,11 @@ private fun buildRootSettings(
     }
     out += SettingItem.Choice(
         "backdropblur", "背景流光", backdropName, Icons.Default.BlurOn
+    )
+    out += SettingItem.Choice(
+        "glasstier", "亮面玻璃",
+        GlassTiers.label(glassTier) + " · " + GlassTiers.summary(glassTier),
+        Icons.Default.AutoAwesome
     )
     out += SettingItem.Toggle(
         "reflectiontilt", "倒影随动",

@@ -216,6 +216,8 @@ class MusicBoxApp : Application() {
     val glassBlur = MutableStateFlow(true)
     /** 背景模糊度档位：0=清晰、1=轻(6dp)、2=中(16dp)、3=重(32dp)。默认中档 2。 */
     val glassBlurLevel = MutableStateFlow(2)
+    /** 亮面玻璃档位：0=厚玻璃、1=亮面、2=极透、3=关闭（省电），默认 0。 */
+    val glassTier = MutableStateFlow(0)
     /**
      * 列表图标主题：七套互斥单选——0=透明玻璃、1=磨砂玻璃、2=彩色玻璃、3=棱镜色散、
      * 4=霓虹玻璃、5=iPod单色、6=iPod彩色卡片。默认 0（透明玻璃）。
@@ -612,6 +614,8 @@ class MusicBoxApp : Application() {
         // 液态玻璃开关 与 背景模糊度 完全独立：前者控制 backdrop 库玻璃层，后者只控制封面 .blur。
         glassBlur.value = p[T_GLASS_BLUR] ?: true
         glassBlurLevel.value = (p[T_GLASS_LEVEL] ?: 2).coerceIn(0, 3)
+        // 亮面玻璃档位（dev 验证，默认 0=Aura同款）。兼容旧布尔 key。
+        glassTier.value = (p[T_GLASS_TIER] ?: (if (p[T_GLASS_HIGHLIGHT] == true) 0 else 2)).coerceIn(0, 3)
         // 列表图标主题（七套互斥，默认透明玻璃 0）。
         // 兼容旧版「风格 × 图标包」两个 key：没有新 key 时按旧值迁移映射一次。
         iconTheme.value = (p[T_ICON_THEME] ?: legacyIconTheme(
@@ -829,6 +833,14 @@ class MusicBoxApp : Application() {
         glassBlurLevel.value = v
         dataStore.edit { it[T_GLASS_LEVEL] = v }
         CrashLogger.info("Settings", "背景模糊度=$v")
+    }
+
+    /** 亮面玻璃档位：0=厚玻璃、1=亮面、2=极透、3=关闭（省电），持久化。 */
+    suspend fun setGlassTier(tier: Int) {
+        val v = tier.coerceIn(0, 3)
+        glassTier.value = v
+        dataStore.edit { it[T_GLASS_TIER] = v }
+        CrashLogger.info("Settings", "亮面玻璃档位=$v")
     }
 
     /** 列表图标主题（七套互斥单选，0-6）：持久化。 */
@@ -1069,6 +1081,7 @@ class MusicBoxApp : Application() {
             put("haptic_strength", hapticStrength.value)
             put("glass_blur", glassBlur.value)
             put("glass_blur_level", glassBlurLevel.value)
+            put("glass_tier", glassTier.value)
             put("icon_theme", iconTheme.value)
             put("favorites_webdav", encodeIds(favWebDav.value))
             put("favorites_fnos", encodeIds(favFnos.value))
@@ -1130,6 +1143,8 @@ class MusicBoxApp : Application() {
         if (o.has("haptic_strength")) setHapticStrength(o.optInt("haptic_strength"))
         if (o.has("glass_blur_level")) setGlassBlurLevel(o.optInt("glass_blur_level"))
         else if (o.has("glass_blur")) setGlassBlur(o.optBoolean("glass_blur"))
+        if (o.has("glass_tier")) setGlassTier(o.optInt("glass_tier"))
+        else if (o.has("glass_highlight")) setGlassTier(if (o.optBoolean("glass_highlight")) 0 else 2)
         if (o.has("icon_theme")) {
             setIconTheme(o.optInt("icon_theme"))
         } else if (o.has("icon_style") || o.has("icon_pack")) {
@@ -1231,6 +1246,9 @@ private val T_HAPTIC = intPreferencesKey("haptic_strength")
 /** 液态玻璃开关（默认开）。 */
 private val T_GLASS_BLUR = booleanPreferencesKey("glass_blur")
 private val T_GLASS_LEVEL = intPreferencesKey("glass_blur_level")
+private val T_GLASS_TIER = intPreferencesKey("glass_tier")
+/** 旧版亮面高光布尔 key（仅用于迁移，不再写入）。 */
+private val T_GLASS_HIGHLIGHT = booleanPreferencesKey("glass_highlight")
 /** 列表图标主题（七套互斥单选，0-6）。 */
 private val T_ICON_THEME = intPreferencesKey("icon_theme")
 /** 旧版图标玻璃质感 key（仅用于迁移，不再写入）。 */

@@ -348,6 +348,7 @@ fun ClickWheel(
                 // 中心保持通透。浅色模式降低整体强度避免白轮上的白雾。
                 val backdrop = LocalGlassBackdrop.current
                 val cfg = LocalGlassBlurConfig.current
+                val spec = cfg.tierSpec
                 val centerIntensity = if (cfg.enabled) cfg.intensity * (if (dark) 1f else 0.72f) else 0f
                 val centerShape = RoundedCornerShape(percent = 50)
                 Box(
@@ -356,7 +357,7 @@ fun ClickWheel(
                         .size(d * 0.22f)
                         .scale(centerScale)
                         .then(
-                            if (backdrop != null && centerIntensity > 0f) {
+                            if (backdrop != null && centerIntensity > 0f && spec.backdropEnabled) {
                                 // 与外圈滚轮完全相同的 backdrop 管线：真采样 + 轻模糊 + lens 边缘折射，
                                 // 背景清晰透出（中心只做内凹光影，不糊成磨砂）。depthEffect 保持默认 false——
                                 // 圆心 normalize(0,0)=NaN 会产生纯白盘，绝不能开。
@@ -365,19 +366,26 @@ fun ClickWheel(
                                     shape = { centerShape },
                                     effects = {
                                         colorControls(saturation = 1.25f)
-                                        blur(4f.dp.toPx())
+                                        blur(spec.blurDp.dp.toPx())
                                         lens(
                                             refractionHeight = 8f.dp.toPx(),
                                             refractionAmount = 16f.dp.toPx(),
                                             chromaticAberration = true
                                         )
                                     },
+                                    // 亮面玻璃三档（设置页可调）：width/blurRadius/alpha 随档位变化。
+                                    highlight = { spec.highlight(alphaScale = centerIntensity) },
                                     onDrawSurface = {
                                         drawCenterGlassSurface(
                                             intensity = centerIntensity,
                                             active = centerActive,
-                                            unit = 1.dp.toPx()
+                                            unit = 1.dp.toPx(),
+                                            surfaceScale = spec.surfaceScale
                                         )
+                                        // 三档色膜：A .10 / B .04 / C 0，越低越通透
+                                        if (spec.tintAlpha > 0f) {
+                                            drawRect(Color.Black.copy(alpha = spec.tintAlpha * centerIntensity))
+                                        }
                                     }
                                 )
                             } else {
@@ -412,9 +420,11 @@ fun ClickWheel(
  *  4. 色散：右下受光侧一段青→品红极淡 fringe，Plus 混合只提亮。
  * [active] 按下时高光提亮一档，产生光泽「流动」感。
  */
-private fun DrawScope.drawCenterGlassSurface(intensity: Float, active: Boolean, unit: Float) {
+private fun DrawScope.drawCenterGlassSurface(
+    intensity: Float, active: Boolean, unit: Float, surfaceScale: Float = 1f
+) {
     if (intensity <= 0f) return
-    val s = intensity * (if (active) 1.18f else 1f)
+    val s = intensity * surfaceScale * (if (active) 1.18f else 1f)
     val c = center
     val r = min(size.width, size.height) / 2f
     val rim = r * 0.26f

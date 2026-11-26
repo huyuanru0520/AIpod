@@ -17,20 +17,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,7 +42,6 @@ import android.media.MediaMetadataRetriever
 import android.util.LruCache
 import com.aipod.MusicBoxApp
 import com.aipod.data.Track
-import com.aipod.player.PlayerController
 import com.aipod.util.AudioTags
 import com.aipod.util.CrashLogger
 import com.aipod.util.MediaHead
@@ -687,53 +680,5 @@ fun LoadingBox() {
 fun ErrorText(message: String, modifier: Modifier = Modifier) {
     Box(Modifier.fillMaxSize().then(modifier), contentAlignment = Alignment.Center) {
         Text(message, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
-    }
-}
-
-@Composable
-fun MiniPlayer(onClick: () -> Unit) {
-    val queue by PlayerController.queue.collectAsState()
-    val idx by PlayerController.currentIndex.collectAsState()
-    val isPlaying by PlayerController.isPlaying.collectAsState()
-    val current = if (idx in queue.indices) queue[idx] else null
-    // 外壳常驻，可见性交给 AnimatedVisibility：点歌开始播放时从底部滑入，
-    // 而不是「突然出现、把下面的内容顶上去」。
-    androidx.compose.animation.AnimatedVisibility(
-        visible = current != null,
-        enter = androidx.compose.animation.slideInVertically(
-            androidx.compose.animation.core.tween(220)
-        ) { it } + androidx.compose.animation.fadeIn(
-            androidx.compose.animation.core.tween(180)
-        ),
-        exit = androidx.compose.animation.slideOutVertically(
-            androidx.compose.animation.core.tween(180)
-        ) { it } + androidx.compose.animation.fadeOut(
-            androidx.compose.animation.core.tween(140)
-        )
-    ) {
-        val c = current ?: return@AnimatedVisibility
-        Surface(
-            tonalElevation = 3.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onClick)
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                CoverImage(c.coverUrl, Modifier.size(44.dp), embeddedAudioUrl = c.embeddedAudioUrl)
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(c.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(c.artist.ifBlank { "未知歌手" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                IconButton(onClick = {
-                    if (isPlaying) PlayerController.pause() else PlayerController.play()
-                }) {
-                    Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null)
-                }
-            }
-        }
     }
 }
