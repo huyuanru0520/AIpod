@@ -22,7 +22,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -32,14 +31,11 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.PI
-import kotlin.math.sin
 
 /**
  * 液态玻璃配置（Apple Liquid Glass 观感）。
@@ -291,124 +287,29 @@ private fun DrawScope.drawWheelGlass(intensity: Float) {
     val r = min(size.width, size.height) / 2f
     val c = center
     val unit = 1.dp.toPx()
-    // 环带宽度固定为直径的一个小比例且封顶，避免大圆盘上出现宽灰带。
-    val rim = min(r * 0.085f, 26f * unit)
-    val ringR = r - rim * 0.5f
 
-    // (2) 顶部镜面高光弧：一串短弧沿圆周排布，alpha 走 sin 包络 → 两端自然淡出。
-    //   Compose 角度：0°=3点、90°=6点、270°=12点；取 200°~340°（约 10点→2点跨顶部）。
-    val arcStart = 200f
-    val arcEnd = 340f
-    val seg = 3f
-    var ang = arcStart
-    while (ang < arcEnd) {
-        val t = (ang - arcStart) / (arcEnd - arcStart)   // 0..1
-        val envelope = sin(t * PI).toFloat().coerceAtLeast(0f) // 两端 0、中间 1
-        drawArc(
-            color = Color.White.copy(alpha = 0.85f * s * envelope),
-            startAngle = ang,
-            sweepAngle = seg + 0.6f, // 轻微重叠避免接缝
-            useCenter = false,
-            topLeft = Offset(c.x - ringR, c.y - ringR),
-            size = Size(ringR * 2f, ringR * 2f),
-            style = Stroke(width = rim * 0.55f, cap = StrokeCap.Round)
-        )
-        ang += seg
-    }
-    // 高光弧外侧再叠一道更细更亮的核心线，让反光有「锐利边」
-    ang = arcStart + 6f
-    while (ang < arcEnd - 6f) {
-        val t = (ang - arcStart) / (arcEnd - arcStart)
-        val envelope = sin(t * PI).toFloat().coerceAtLeast(0f)
-        drawArc(
-            color = Color.White.copy(alpha = 0.55f * s * envelope),
-            startAngle = ang,
-            sweepAngle = seg + 0.6f,
-            useCenter = false,
-            topLeft = Offset(c.x - ringR, c.y - ringR),
-            size = Size(ringR * 2f, ringR * 2f),
-            style = Stroke(width = 1.6f * unit, cap = StrokeCap.Round)
-        )
-        ang += seg
-    }
-
-    // (1) 菲涅尔亮线：整圈细边，竖向渐变——上缘最亮、两侧渐弱、底部一道 bounce 反光。
+    // 关闭档兜底：只画一圈连续、干净的细描边勾出滚轮轮廓，背景 100% 透出。
+    // ★ 绝不用分段短弧（drawArc + StrokeCap.Round）：段长小于线宽时会变成一圈虚线圆点，
+    //   那正是「点状边缘」的来源。这里每一笔都是一次成型的连续 drawCircle，无接缝。
+    // 外缘：上缘略亮、两侧与底部极淡的连续细边。
     drawCircle(
         brush = Brush.verticalGradient(
-            0f to Color.White.copy(alpha = 0.92f * s),
-            0.30f to Color.White.copy(alpha = 0.22f * s),
-            0.72f to Color.White.copy(alpha = 0.10f * s),
-            1f to Color.White.copy(alpha = 0.55f * s)
+            0f to Color.White.copy(alpha = 0.26f * s),
+            0.25f to Color.White.copy(alpha = 0.10f * s),
+            0.70f to Color.White.copy(alpha = 0.05f * s),
+            1f to Color.White.copy(alpha = 0.14f * s)
         ),
-        radius = r - 0.9f * unit,
+        radius = r - 0.75f * unit,
         center = c,
-        style = Stroke(width = 1.5f * unit)
+        style = Stroke(width = 1.1f * unit)
     )
-
-    // (3) 内缘：极淡冷白勾出玻璃厚度 + 左上一段青→品红色散，之后中心全部留空透明。
+    // 内缘：极淡一圈，勾出玻璃厚度，连续无接缝。
     drawCircle(
-        color = Color.White.copy(alpha = 0.06f * s),
-        radius = r - rim,
+        color = Color.White.copy(alpha = 0.05f * s),
+        radius = r - 3.2f * unit,
         center = c,
-        style = Stroke(width = 1f * unit)
+        style = Stroke(width = 0.9f * unit)
     )
-    drawCircle(
-        brush = Brush.linearGradient(
-            colors = listOf(
-                Color(0xFF7FE8FF).copy(alpha = 0.18f * s),
-                Color(0xFFFF9AD5).copy(alpha = 0.10f * s),
-                Color.Transparent
-            ),
-            start = Offset(c.x - r, c.y - r),
-            end = Offset(c.x + r * 0.2f, c.y + r * 0.2f)
-        ),
-        radius = r - 1.2f * unit,
-        center = c,
-        style = Stroke(width = 1.8f * unit),
-        blendMode = BlendMode.Plus
-    )
-
-    // (4) 极淡径向体积：中心完全透明、边缘微微发白，给整个圆环一点圆润的厚度感。
-    //     alpha 封顶 0.06，绝不在中心铺色，避免又糊成磨砂盘。
-    drawCircle(
-        brush = Brush.radialGradient(
-            colorStops = arrayOf(
-                0.00f to Color.Transparent,
-                0.62f to Color.Transparent,
-                0.88f to Color.White.copy(alpha = 0.035f * s),
-                1.00f to Color.White.copy(alpha = 0.06f * s)
-            ),
-            center = c, radius = r
-        ),
-        radius = r, center = c
-    )
-
-    // (5) 顶部 / 底部各一条模糊高光带：模拟圆环上下的圆润反光，用多段窄弧 + sin 包络淡入淡出。
-    //     顶部一条偏冷白、底部一条更弱偏暖，形成上下呼应而不对称的玻璃光泽。
-    val bandR = r - rim * 0.35f
-    drawArcBand(c, bandR, 188f, 344f, rim * 0.7f, Color.White, 0.16f * s, 5f, unit)
-    drawArcBand(c, bandR, 8f, 172f, rim * 0.55f, Color(0xFFFFF4E8), 0.09f * s, 5f, unit)
-}
-
-/** 沿圆环画一段带 sin 包络淡入淡出的柔光弧（用于顶部/底部高光带）。 */
-private fun DrawScope.drawArcBand(
-    c: Offset, radius: Float, startAngle: Float, endAngle: Float,
-    width: Float, color: Color, maxAlpha: Float, seg: Float, unit: Float
-) {
-    var ang = startAngle
-    while (ang < endAngle) {
-        val t = (ang - startAngle) / (endAngle - startAngle)
-        val env = sin(t * PI).toFloat().coerceAtLeast(0f)
-        drawArc(
-            color = color.copy(alpha = maxAlpha * env),
-            startAngle = ang, sweepAngle = seg + 0.6f,
-            useCenter = false,
-            topLeft = Offset(c.x - radius, c.y - radius),
-            size = Size(radius * 2f, radius * 2f),
-            style = Stroke(width = width, cap = StrokeCap.Round)
-        )
-        ang += seg
-    }
 }
 
 /** 圆形滚轮专用 Modifier：画在底色之上、内容之下，中心零绘制。 */
